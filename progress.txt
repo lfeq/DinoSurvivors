@@ -1,0 +1,60 @@
+- Implemented walking skeleton (Issue #2).
+- Created DinoSurvivors.Core class library with deterministic simulation, independent of MonoGame, and default SystemRng/NullPersistence/NullContentProvider seams.
+- Created DinoSurvivors.Tests xUnit project with 4 passing tests covering player movement, diagonal normalization, and arena clamping.
+- Integrated simulation core in Game1, mapping keyboard/mouse input to Control Actions, implementing follow camera, and rendering player and arena boundaries via programmatic white pixel texture.
+- Configured roll-forward on all projects to run on .NET 10.
+- Excluded Core/Tests compilation from root csproj to prevent duplicate attributes/types.
+- Closed issue #2.
+- Implemented Enemy spawning, Direct Pursuit, and Soft Collision for Compies (Issue #3).
+- Added Enemy class with Position, Speed (120f), and Radius (12f) properties.
+- Implemented deterministic spawning in Simulation: spawns Compies on a 1.5s interval outside of Player's MinSpawnRadius (450f) and clamps within ArenaSize (2000x2000).
+- Implemented Direct Pursuit: enemies calculate direction to player and move straight towards them every step.
+- Implemented Soft Collisions: resolves overlaps between enemies (50%/50% push) and between enemies and player (80% enemy push / 20% player push to avoid hard-blocking the player).
+- Added 5 new headless xUnit tests verifying all spawning constraints, pursuit movement, enemy-enemy/enemy-player soft collisions, and boundary clamping.
+- Updated Game1 to render Compies as small orange squares under the follow camera.
+- Closed issue #3.
+- Implemented Contact Damage + player HP + run-loss on death (Issue #4).
+- Added PlayerMaxHp (100f), PlayerCurrentHp (100f), and IsRunLost properties to Simulation.
+- Added Damage (10f), ContactCooldown (1.0f), and ContactCooldownTimer properties to Enemy.
+- Updated Simulation.Step to decrement/clamp ContactCooldownTimer at the start of each step, apply contact damage on player overlap when the cooldown is 0, trigger the OnPlayerDamaged event, transition to IsRunLost = true when HP reaches 0, and early return (freeze normal play) if IsRunLost is true.
+- Added 6 new headless xUnit tests covering initial HP, damage application, event dispatching, rate-limiting via contact cooldowns, multiple enemies dealing independent damage, HP 0 transitioning to lost run, and no play after run loss.
+- Integrated visual feedback in Game1: player flashes red for 0.2s after taking damage, a screen-space HUD displays a glassmorphic health bar (turning red when below 30% HP), and a run-lost banner overlay covers the viewport when the run is lost.
+- Closed issue #4.
+- Implemented Tranq Pistol Auto-Fire + Mouse Aiming + Combat Feedback (Issue #5).
+- Created Projectile class in DinoSurvivors.Core representing player weapon shots.
+- Added properties Hp (default 20f), MaxHp (default 20f), and HitFlashTimer (default 0f) to Enemy class.
+- Added Projectiles list, WeaponCooldown (0.8s), and events OnEnemyHit and OnEnemyKilled to Simulation.
+- Updated Simulation.Step to:
+  - Spawn Projectile at PlayerPosition towards actions.AimDirection on WeaponCooldown interval.
+  - Move projectiles by speed (600px/s) and remove them if they go out of the 2000x2000 arena bounds.
+  - Check collisions between projectiles and enemies (using Radius 6f for projectiles, 12f for enemies).
+  - Apply 10 damage to enemies on hit, set HitFlashTimer to 0.15s, remove the projectile, and trigger OnEnemyHit.
+  - Remove enemies when HP reaches 0 and trigger OnEnemyKilled.
+- Added 5 new headless xUnit tests in SimulationTests.cs verifying weapon firing cadence, projectile movement direction and speed, projectile collision damage and removal, enemy death on 0 HP, and out-of-bounds projectile cleanup.
+- Integrated visual and audio combat feedback in Game1:
+  - Rendered projectiles as small yellow squares.
+  - Rendered enemy hit flashes (Compy flashes white if HitFlashTimer > 0).
+  - Programmed a custom 3x5 pixel font digits renderer to draw floating yellow damage numbers at hit positions (floating up and fading out).
+  - Programmed a synthesized retro hit sound effect completely in code using DynamicSoundEffectInstance (no asset requirements).
+  - Rendered a death pop particle effect at enemy death coordinates.
+- Closed issue #5.
+- Implemented XP Gems: drop, collect within Pickup Radius, accumulate (Issue #6).
+- Created XpGem class representing experience gems dropped by defeated enemies.
+- Added XpGems list, PlayerLevel (starts at 1), PlayerXp (starts at 0), XpToNextLevel (100 * level), PlayerPickupRadius (default 45f) properties and OnXpGemCollected event to Simulation.
+- Updated Simulation.Step to drop an XP Gem at the enemy's coordinates on death, detect collection when player moves within PlayerPickupRadius, increment player levels on threshold crossings, and fire corresponding collection events.
+- Added 5 new headless xUnit tests covering gem drop on death, collection only within Pickup Radius, player level up and XP roll-forward, and uncollected gem persistence.
+- Integrated visual feedback in Game1: rendered XP gems as small cyan squares and drew a sleek cyan progress bar and level indicator in the screen-space HUD.
+- Closed issue #6.
+- Implemented Weapon roster (Flare Gun, Bug Zapper) + Weapon Levels + Weapon Slots (Issue #7).
+- Created `WeaponDefinition`, `WeaponLevelData`, and `WeaponInstance` classes to represent weapon metadata, levels, and runtime instances.
+- Refactored `IContentProvider` and `NullContentProvider`/`StubContentProvider` to supply data-driven weapon configurations, defining Tranq Pistol, Flare Gun, Bug Zapper, and a test Laser weapon under `DefaultContent`.
+- Updated `Simulation` to initialize with Tranq Pistol (Lvl 1) in `EquippedWeapons`.
+- Added `TryAddOrUpgradeWeapon` to `Simulation` to manage adding new weapons (slots capped at 3) and upgrading levels (capped at 5).
+- Refactored `Projectile` to support custom speed, radius, damage, pierce count, and explosion radius, and added `HashSet<Enemy> HitEnemies` to prevent duplicate hits on the same enemy in a single frame.
+- Updated `Simulation.Step` to update all equipped weapons: aimed weapons spawn projectiles in the aim direction, and autonomous weapons perform reverse-loop area checks to deal damage directly around the player.
+- Added 4 new headless xUnit tests verifying slot/level limits, weapon-specific aimed/autonomous behaviors, Flare Gun piercing, and Bug Zapper range/damage.
+- Integrated visual feedback in `Game1.cs`:
+  - Rendered projectiles using their actual data-driven radius and color-coded them (Crimson for Flare Gun piercing shots, Yellow for Tranq Pistol).
+  - Drawn equipped weapons and their levels in three distinct HUD slots using the custom pixel digit font.
+  - Rendered a temporary translucent electric blue shockwave and outline around the player when the Bug Zapper discharges.
+- Closed issue #7.
