@@ -4,3 +4,7 @@ obj/
 riderModule.iml
 /_ReSharper.Caches/
 .DS_Store
+
+# Distributable build archives
+DinoSurvivors-Windows.zip
+DinoSurvivors-macOS.zip
