@@ -1,3 +1,5 @@
 <Solution>
   <Project Path="DinoSurvivors.csproj" />
+  <Project Path="DinoSurvivors.Core/DinoSurvivors.Core.csproj" />
+  <Project Path="DinoSurvivors.Tests/DinoSurvivors.Tests.csproj" />
 </Solution>
