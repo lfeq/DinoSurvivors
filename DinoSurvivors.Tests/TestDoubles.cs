@@ -18,4 +18,6 @@ public class StubContentProvider : IContentProvider {
 
     public WeaponDefinition? GetWeaponDefinition(string id) => _provider.GetWeaponDefinition(id);
     public IEnumerable<WeaponDefinition> GetAllWeapons() => _provider.GetAllWeapons();
+    public PassiveDefinition? GetPassiveDefinition(string id) => _provider.GetPassiveDefinition(id);
+    public IEnumerable<PassiveDefinition> GetAllPassives() => _provider.GetAllPassives();
 }

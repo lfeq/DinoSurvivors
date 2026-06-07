@@ -835,6 +835,115 @@ public class SimulationTests {
         Assert.Contains(sim.Enemies, e => e.Hp == 15f);
         Assert.DoesNotContain(sim.Enemies, e => e.Hp == 30f);
     }
+
+    // --- Issue #8: Passive Items + Player Stat Composition ---
+
+    [Fact]
+    public void SouvenirMagnet_Level1_IncreasesPickupRadius() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        var baseRadius = sim.PlayerPickupRadius;
+
+        sim.TryAddOrUpgradePassive("SouvenirMagnet");
+
+        Assert.True(sim.PlayerEffectivePickupRadius > baseRadius);
+        Assert.Equal(baseRadius * 1.15f, sim.PlayerEffectivePickupRadius, 3);
+    }
+
+    [Fact]
+    public void PassiveSlotCapIsThree() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        Assert.True(sim.TryAddOrUpgradePassive("SouvenirMagnet"));
+        Assert.True(sim.TryAddOrUpgradePassive("RunningShoes"));
+        Assert.True(sim.TryAddOrUpgradePassive("FirstAidFannyPack"));
+        Assert.False(sim.TryAddOrUpgradePassive("FoamDinoClaw")); // 4th passive: slot cap
+        Assert.Equal(3, sim.EquippedPassives.Count);
+    }
+
+    [Fact]
+    public void PassiveLevelCapIsThree() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        Assert.True(sim.TryAddOrUpgradePassive("SouvenirMagnet"));  // Level 1
+        Assert.True(sim.TryAddOrUpgradePassive("SouvenirMagnet"));  // Level 2
+        Assert.True(sim.TryAddOrUpgradePassive("SouvenirMagnet"));  // Level 3
+        Assert.False(sim.TryAddOrUpgradePassive("SouvenirMagnet")); // Level 4: cap
+        Assert.Equal(3, sim.EquippedPassives[0].Level);
+    }
+
+    [Fact]
+    public void RunningShoes_IncreasesEffectiveSpeed() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.TryAddOrUpgradePassive("RunningShoes");
+
+        var startX = sim.PlayerPosition.X;
+        sim.Step(new ControlActions(new Vector2(1, 0), Vector2.Zero), 0.1f);
+
+        // With RunningShoes L1 (1.15x): 200 * 1.15 * 0.1 = 23f
+        Assert.Equal(startX + 200f * 1.15f * 0.1f, sim.PlayerPosition.X, 2);
+    }
+
+    [Fact]
+    public void FoamDinoClaw_IncreasesEffectiveDamage() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.TryAddOrUpgradePassive("FoamDinoClaw");
+
+        sim.SpawnEnemyAt(new Vector2(1100, 1000));
+        sim.Enemies[0].Hp = 100f;
+
+        // Let sim fire the projectile so damage multiplier is baked in at spawn
+        sim.Step(new ControlActions(Vector2.Zero, new Vector2(1, 0)), 0f);
+        Assert.Single(sim.Projectiles);
+
+        // Move projectile onto the enemy and resolve collision
+        sim.Projectiles[0].Position = new Vector2(1100, 1000);
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0f);
+
+        // TranqPistol base damage 10f × 1.15 (FoamDinoClaw L1) = 11.5
+        Assert.Equal(88.5f, sim.Enemies[0].Hp, 2);
+    }
+
+    [Fact]
+    public void EnergyDrink_DecreasesEffectiveCooldown() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.TryAddOrUpgradePassive("EnergyDrink");
+
+        var aim = new ControlActions(Vector2.Zero, new Vector2(1, 0));
+
+        // Fire initial shot (cooldown timer = 0 initially so it fires immediately)
+        sim.Step(aim, 0f);
+        sim.Projectiles.Clear();
+
+        // TranqPistol base cooldown is 0.8s; with EnergyDrink L1 (0.85x) effective cooldown = 0.68s.
+        // Step 0.7s: base cooldown not yet reached, but effective cooldown (0.68s) IS reached → fires.
+        sim.Step(aim, 0.7f);
+        Assert.Single(sim.Projectiles);
+    }
+
+    [Fact]
+    public void FirstAidFannyPack_IncreasesEffectiveMaxHp() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        var baseMaxHp = sim.PlayerMaxHp; // 100f
+
+        sim.TryAddOrUpgradePassive("FirstAidFannyPack");
+
+        // PlayerMaxHp stays at base; PlayerEffectiveMaxHp applies the multiplier
+        Assert.Equal(100f, sim.PlayerMaxHp);
+        Assert.Equal(baseMaxHp * 1.15f, sim.PlayerEffectiveMaxHp, 3);
+    }
+
+    [Fact]
+    public void CombinedPassiveStatComposition() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        sim.TryAddOrUpgradePassive("SouvenirMagnet");
+        sim.TryAddOrUpgradePassive("RunningShoes");
+        sim.TryAddOrUpgradePassive("FirstAidFannyPack");
+
+        Assert.Equal(45f * 1.15f, sim.PlayerEffectivePickupRadius, 3);
+        Assert.Equal(200f * 1.15f, sim.PlayerEffectiveSpeed, 3);
+        Assert.Equal(100f * 1.15f, sim.PlayerEffectiveMaxHp, 3);
+    }
 }
 
 

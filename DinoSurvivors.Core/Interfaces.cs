@@ -39,26 +39,76 @@ public class WeaponDefinition {
     public List<WeaponLevelData> Levels { get; set; } = new();
 }
 
+public class PassiveLevelData {
+    public float Multiplier { get; set; }
+}
+
+public enum PassiveStat {
+    MaxHp,
+    Damage,
+    MoveSpeed,
+    WeaponCooldown,
+    PickupRadius
+}
+
+public class PassiveDefinition {
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public PassiveStat Stat { get; set; }
+    public List<PassiveLevelData> Levels { get; set; } = new();
+}
+
+public class PassiveInstance {
+    public PassiveDefinition Definition { get; }
+    public int Level { get; set; }
+
+    public PassiveInstance(PassiveDefinition definition, int level = 1) {
+        Definition = definition;
+        Level = level;
+    }
+
+    public PassiveLevelData CurrentLevelData => Definition.Levels[Level - 1];
+}
+
 public interface IContentProvider {
     WeaponDefinition? GetWeaponDefinition(string id);
     IEnumerable<WeaponDefinition> GetAllWeapons();
+    PassiveDefinition? GetPassiveDefinition(string id);
+    IEnumerable<PassiveDefinition> GetAllPassives();
 }
 
 public class NullContentProvider : IContentProvider {
     private readonly Dictionary<string, WeaponDefinition> _weapons;
+    private readonly Dictionary<string, PassiveDefinition> _passives;
 
     public NullContentProvider() {
         _weapons = DefaultContent.Weapons;
+        _passives = DefaultContent.Passives;
     }
 
-    public WeaponDefinition? GetWeaponDefinition(string id) {
-        return _weapons.TryGetValue(id, out var def) ? def : null;
-    }
-
+    public WeaponDefinition? GetWeaponDefinition(string id) => _weapons.TryGetValue(id, out var def) ? def : null;
     public IEnumerable<WeaponDefinition> GetAllWeapons() => _weapons.Values;
+    public PassiveDefinition? GetPassiveDefinition(string id) => _passives.TryGetValue(id, out var def) ? def : null;
+    public IEnumerable<PassiveDefinition> GetAllPassives() => _passives.Values;
 }
 
 public static class DefaultContent {
+    private static List<PassiveLevelData> BuffLevels() => new() {
+        new() { Multiplier = 1.15f },
+        new() { Multiplier = 1.30f },
+        new() { Multiplier = 1.50f }
+    };
+
+    public static Dictionary<string, PassiveDefinition> Passives { get; } = new() {
+        { "FirstAidFannyPack", new PassiveDefinition { Id = "FirstAidFannyPack", Name = "First Aid Fanny Pack", Stat = PassiveStat.MaxHp, Levels = BuffLevels() } },
+        { "FoamDinoClaw",      new PassiveDefinition { Id = "FoamDinoClaw",      Name = "Foam Dino Claw",      Stat = PassiveStat.Damage, Levels = BuffLevels() } },
+        { "RunningShoes",      new PassiveDefinition { Id = "RunningShoes",      Name = "Running Shoes",       Stat = PassiveStat.MoveSpeed, Levels = BuffLevels() } },
+        { "EnergyDrink",       new PassiveDefinition { Id = "EnergyDrink",       Name = "Energy Drink",        Stat = PassiveStat.WeaponCooldown, Levels = new() {
+            new() { Multiplier = 0.85f }, new() { Multiplier = 0.70f }, new() { Multiplier = 0.55f }
+        } } },
+        { "SouvenirMagnet",    new PassiveDefinition { Id = "SouvenirMagnet",    Name = "Souvenir Magnet",     Stat = PassiveStat.PickupRadius, Levels = BuffLevels() } }
+    };
+
     public static Dictionary<string, WeaponDefinition> Weapons { get; } = new() {
         {
             "TranqPistol", new WeaponDefinition {

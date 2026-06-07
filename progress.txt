@@ -58,3 +58,13 @@
   - Drawn equipped weapons and their levels in three distinct HUD slots using the custom pixel digit font.
   - Rendered a temporary translucent electric blue shockwave and outline around the player when the Bug Zapper discharges.
 - Closed issue #7.
+- Implemented Passive Items + Player Stat composition (Issue #8).
+- Added PassiveLevelData, PassiveStat enum, PassiveDefinition, and PassiveInstance classes to DinoSurvivors.Core/Interfaces.cs (parallel to Weapon types).
+- Extended IContentProvider with GetPassiveDefinition/GetAllPassives; updated NullContentProvider and StubContentProvider accordingly.
+- Added five MVP passives to DefaultContent: FirstAidFannyPack (max HP ×1.15/1.30/1.50), FoamDinoClaw (damage ×1.15/1.30/1.50), RunningShoes (move speed ×1.15/1.30/1.50), EnergyDrink (cooldown ×0.85/0.70/0.55), SouvenirMagnet (pickup radius ×1.15/1.30/1.50).
+- Added EquippedPassives list and TryAddOrUpgradePassive(string id) to Simulation (3-slot cap, 3-level cap).
+- Added computed properties: PlayerEffectiveSpeed, PlayerEffectiveMaxHp, PlayerEffectivePickupRadius (base × passive multiplier via GetPassiveMultiplier helper).
+- Updated Simulation.Step() to use PlayerEffectiveSpeed for movement, PlayerEffectivePickupRadius for gem pickup, and apply damage/cooldown passive multipliers at weapon fire time (baked into Projectile.Damage at spawn; applied to autonomous zapper damage; applied to CooldownTimer reset).
+- Added 8 new headless xUnit tests covering: SouvenirMagnet increases pickup radius, passive slot cap of 3, passive level cap of 3, RunningShoes increases movement distance, FoamDinoClaw increases projectile damage, EnergyDrink fires weapon before base cooldown expires, FirstAidFannyPack increases effective max HP, and combined 3-passive stat composition.
+- All 37 tests pass (29 pre-existing + 8 new).
+- Closed issue #8.

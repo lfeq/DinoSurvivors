@@ -22,6 +22,16 @@ public class Simulation {
     public float XpToNextLevel => 100f * PlayerLevel;
     public event Action<XpGem>? OnXpGemCollected;
     public List<WeaponInstance> EquippedWeapons { get; } = new();
+    public List<PassiveInstance> EquippedPassives { get; } = new();
+
+    public float PlayerEffectivePickupRadius => PlayerPickupRadius * GetPassiveMultiplier(PassiveStat.PickupRadius);
+    public float PlayerEffectiveSpeed => PlayerSpeed * GetPassiveMultiplier(PassiveStat.MoveSpeed);
+    public float PlayerEffectiveMaxHp => PlayerMaxHp * GetPassiveMultiplier(PassiveStat.MaxHp);
+
+    private float GetPassiveMultiplier(PassiveStat stat) {
+        var passive = EquippedPassives.Find(p => p.Definition.Stat == stat);
+        return passive?.CurrentLevelData.Multiplier ?? 1f;
+    }
 
     private readonly IRng _rng;
     private readonly IContentProvider _content;
@@ -63,6 +73,20 @@ public class Simulation {
         }
     }
 
+    public bool TryAddOrUpgradePassive(string passiveId) {
+        var existing = EquippedPassives.Find(p => p.Definition.Id == passiveId);
+        if (existing != null) {
+            if (existing.Level >= 3) return false;
+            existing.Level++;
+            return true;
+        }
+        if (EquippedPassives.Count >= 3) return false;
+        var def = _content.GetPassiveDefinition(passiveId);
+        if (def == null) return false;
+        EquippedPassives.Add(new PassiveInstance(def, 1));
+        return true;
+    }
+
     public void SpawnEnemyAt(Vector2 position) {
         Enemies.Add(new Enemy(position));
     }
@@ -89,27 +113,29 @@ public class Simulation {
                             aimDir = Vector2.Normalize(aimDir);
                         }
                         var data = weapon.CurrentLevelData;
+                        var effectiveDamage = data.Damage * GetPassiveMultiplier(PassiveStat.Damage);
                         Projectiles.Add(new Projectile(
-                            PlayerPosition, 
-                            aimDir, 
-                            data.ProjectileSpeed, 
-                            data.ProjectileRadius, 
-                            data.Damage, 
+                            PlayerPosition,
+                            aimDir,
+                            data.ProjectileSpeed,
+                            data.ProjectileRadius,
+                            effectiveDamage,
                             data.PierceCount,
                             data.ExplosionRadius
                         ));
-                        weapon.CooldownTimer = data.Cooldown;
+                        weapon.CooldownTimer = data.Cooldown * GetPassiveMultiplier(PassiveStat.WeaponCooldown);
                     }
                 } else {
                     // Autonomous area zapper behavior
                     var data = weapon.CurrentLevelData;
+                    var autonomousDamage = data.Damage * GetPassiveMultiplier(PassiveStat.Damage);
                     for (int j = Enemies.Count - 1; j >= 0; j--) {
                         var enemy = Enemies[j];
                         var dist = Vector2.Distance(PlayerPosition, enemy.Position);
                         if (dist <= data.RangeOrRadius) {
-                            enemy.Hp -= data.Damage;
+                            enemy.Hp -= autonomousDamage;
                             enemy.HitFlashTimer = 0.15f;
-                            OnEnemyHit?.Invoke(enemy.Position, data.Damage);
+                            OnEnemyHit?.Invoke(enemy.Position, autonomousDamage);
                             if (enemy.Hp <= 0f) {
                                 Enemies.RemoveAt(j);
                                 OnEnemyKilled?.Invoke(enemy.Position);
@@ -117,7 +143,7 @@ public class Simulation {
                             }
                         }
                     }
-                    weapon.CooldownTimer = data.Cooldown;
+                    weapon.CooldownTimer = data.Cooldown * GetPassiveMultiplier(PassiveStat.WeaponCooldown);
                 }
             }
         }
@@ -199,7 +225,7 @@ public class Simulation {
             if (moveDir.LengthSquared() > 1f) {
                 moveDir = Vector2.Normalize(moveDir);
             }
-            PlayerPosition += moveDir * PlayerSpeed * deltaTime;
+            PlayerPosition += moveDir * PlayerEffectiveSpeed * deltaTime;
         }
 
         PlayerPosition = Vector2.Clamp(PlayerPosition, Vector2.Zero, ArenaSize);
@@ -208,7 +234,7 @@ public class Simulation {
         for (int i = XpGems.Count - 1; i >= 0; i--) {
             var gem = XpGems[i];
             var dist = Vector2.Distance(PlayerPosition, gem.Position);
-            if (dist <= PlayerPickupRadius) {
+            if (dist <= PlayerEffectivePickupRadius) {
                 PlayerXp += gem.XpValue;
                 while (PlayerXp >= XpToNextLevel) {
                     PlayerXp -= XpToNextLevel;
