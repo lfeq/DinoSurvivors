@@ -248,6 +248,18 @@ public class Game1 : Game {
             _spriteBatch.Draw(_pixelTexture, gemRect, Color.Cyan);
         }
 
+        // Draw Jurassic Cash drops (small gold squares)
+        int cashDropSize = 6;
+        foreach (var drop in _simulation.JurassicCashDrops) {
+            var dropRect = new Rectangle(
+                (int)drop.Position.X - cashDropSize / 2,
+                (int)drop.Position.Y - cashDropSize / 2,
+                cashDropSize,
+                cashDropSize
+            );
+            _spriteBatch.Draw(_pixelTexture, dropRect, Color.Gold);
+        }
+
         // Draw death pops (expanding particles)
         foreach (var effect in _deathPopEffects) {
             float progress = 1f - (effect.Timer / DeathPopEffect.MaxTimer);
@@ -337,6 +349,23 @@ public class Game1 : Game {
                 // Draw Level number next to slot
                 DrawPixelNumber(weapon.Level, x + slotSize + 4, y, 2, Color.White);
             }
+        }
+
+        // Jurassic Cash HUD — Unbanked (gold) and Banked (bright yellow) amounts
+        {
+            int cashY = slotStartY + slotSize + 10;
+            int cashX = slotStartX;
+            int iconSize = 6;
+            int cashPadding = 4;
+
+            // Unbanked: gold dot + number
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(cashX, cashY + 1, iconSize, iconSize), Color.Gold);
+            DrawPixelNumber(_simulation.UnbankedJurassicCash, cashX + iconSize + cashPadding, cashY, 2, Color.Gold);
+
+            // Banked: bright yellow dot + number (offset right)
+            int bankedX = cashX + 60;
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(bankedX, cashY + 1, iconSize, iconSize), Color.Yellow);
+            DrawPixelNumber(_simulation.BankedJurassicCash, bankedX + iconSize + cashPadding, cashY, 2, Color.Yellow);
         }
 
         // If game over, show run-lost overlay

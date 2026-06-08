@@ -23,6 +23,12 @@ public class Simulation {
     public event Action<XpGem>? OnXpGemCollected;
     public List<WeaponInstance> EquippedWeapons { get; } = new();
     public List<PassiveInstance> EquippedPassives { get; } = new();
+    public bool IsPausedForLevelUp { get; private set; } = false;
+    public List<UpgradeOption> PendingLevelUpOptions { get; } = new();
+    public int UnbankedJurassicCash { get; private set; } = 0;
+    public int BankedJurassicCash { get; private set; } = 0;
+    public List<JurassicCashDrop> JurassicCashDrops { get; } = new();
+    private const float CashDropChance = 0.20f;
 
     public float PlayerEffectivePickupRadius => PlayerPickupRadius * GetPassiveMultiplier(PassiveStat.PickupRadius);
     public float PlayerEffectiveSpeed => PlayerSpeed * GetPassiveMultiplier(PassiveStat.MoveSpeed);
@@ -33,11 +39,14 @@ public class Simulation {
         return passive?.CurrentLevelData.Multiplier ?? 1f;
     }
 
+    public int StageNumber { get; set; } = 1;
+    public float StageTimeElapsed { get; set; } = 0f;
+    public int LiveEnemyCap => StageNumber switch { 2 => 100, 3 => 120, _ => 80 };
+
     private readonly IRng _rng;
     private readonly IContentProvider _content;
     public List<Enemy> Enemies { get; } = new();
     private float _spawnTimer = 0f;
-    private const float SpawnInterval = 1.5f;
     private const float MinSpawnRadius = 450f;
     private const float MaxSpawnRadius = 800f;
 
@@ -91,10 +100,116 @@ public class Simulation {
         Enemies.Add(new Enemy(position));
     }
 
+    public void SelectLevelUpOption(int index) {
+        if (!IsPausedForLevelUp || index < 0 || index >= PendingLevelUpOptions.Count) return;
+
+        var option = PendingLevelUpOptions[index];
+        var oldThreshold = XpToNextLevel;
+
+        switch (option.Type) {
+            case UpgradeType.NewWeapon:
+            case UpgradeType.WeaponUpgrade:
+                if (option.ItemId != null) TryAddOrUpgradeWeapon(option.ItemId);
+                break;
+            case UpgradeType.NewPassive:
+            case UpgradeType.PassiveUpgrade:
+                if (option.ItemId != null) TryAddOrUpgradePassive(option.ItemId);
+                break;
+            case UpgradeType.CashFallback:
+                UnbankedJurassicCash += 25;
+                break;
+        }
+
+        PlayerXp -= oldThreshold;
+        PlayerLevel++;
+        PendingLevelUpOptions.Clear();
+        IsPausedForLevelUp = false;
+
+        if (PlayerXp >= XpToNextLevel) {
+            PendingLevelUpOptions.AddRange(GenerateLevelUpOptions());
+            IsPausedForLevelUp = true;
+        }
+    }
+
+    private List<UpgradeOption> GenerateLevelUpOptions() {
+        var pool = new List<UpgradeOption>();
+
+        foreach (var weaponDef in _content.GetAllWeapons()) {
+            var existing = EquippedWeapons.Find(w => w.Definition.Id == weaponDef.Id);
+            if (existing == null) {
+                if (EquippedWeapons.Count < 3)
+                    pool.Add(new UpgradeOption { Type = UpgradeType.NewWeapon, ItemId = weaponDef.Id });
+            } else if (existing.Level < 5) {
+                pool.Add(new UpgradeOption { Type = UpgradeType.WeaponUpgrade, ItemId = weaponDef.Id });
+            }
+        }
+
+        foreach (var passiveDef in _content.GetAllPassives()) {
+            var existing = EquippedPassives.Find(p => p.Definition.Id == passiveDef.Id);
+            if (existing == null) {
+                if (EquippedPassives.Count < 3)
+                    pool.Add(new UpgradeOption { Type = UpgradeType.NewPassive, ItemId = passiveDef.Id });
+            } else if (existing.Level < 3) {
+                pool.Add(new UpgradeOption { Type = UpgradeType.PassiveUpgrade, ItemId = passiveDef.Id });
+            }
+        }
+
+        var remaining = new List<UpgradeOption>(pool);
+        var selected = new List<UpgradeOption>();
+
+        while (selected.Count < 3 && remaining.Count > 0) {
+            int idx = _rng.Next(0, remaining.Count);
+            selected.Add(remaining[idx]);
+            remaining.RemoveAt(idx);
+        }
+
+        // Category balancing: avoid all 3 from the same category when an alternative exists
+        if (selected.Count == 3) {
+            bool allWeapon = selected.All(o => o.Type is UpgradeType.NewWeapon or UpgradeType.WeaponUpgrade);
+            bool allPassive = selected.All(o => o.Type is UpgradeType.NewPassive or UpgradeType.PassiveUpgrade);
+
+            if (allWeapon) {
+                var alt = remaining.FirstOrDefault(o => o.Type is UpgradeType.NewPassive or UpgradeType.PassiveUpgrade);
+                if (alt != null) selected[2] = alt;
+            } else if (allPassive) {
+                var alt = remaining.FirstOrDefault(o => o.Type is UpgradeType.NewWeapon or UpgradeType.WeaponUpgrade);
+                if (alt != null) selected[2] = alt;
+            }
+        }
+
+        while (selected.Count < 3)
+            selected.Add(new UpgradeOption { Type = UpgradeType.CashFallback });
+
+        return selected;
+    }
+
+    private WavePhase GetCurrentPhase() {
+        if (!DefaultContent.WaveSchedules.TryGetValue(StageNumber, out var phases))
+            return DefaultContent.WaveSchedules[1][0];
+        WavePhase current = phases[0];
+        foreach (var phase in phases)
+            if (StageTimeElapsed >= phase.StartTime) current = phase;
+        return current;
+    }
+
+    private EnemyType SelectEnemyType(WavePhase phase) {
+        int total = 0;
+        foreach (var (_, w) in phase.Weights) total += w;
+        int roll = _rng.Next(0, total);
+        int acc = 0;
+        foreach (var (type, weight) in phase.Weights) {
+            acc += weight;
+            if (roll < acc) return type;
+        }
+        return phase.Weights[0].Type;
+    }
+
     public void Step(ControlActions actions, float deltaTime) {
-        if (IsRunLost) {
+        if (IsRunLost || IsPausedForLevelUp) {
             return;
         }
+
+        StageTimeElapsed += deltaTime;
 
         // Firing logic for equipped weapons
         foreach (var weapon in EquippedWeapons) {
@@ -140,6 +255,8 @@ public class Simulation {
                                 Enemies.RemoveAt(j);
                                 OnEnemyKilled?.Invoke(enemy.Position);
                                 XpGems.Add(new XpGem(enemy.Position));
+                                if (_rng.NextDouble() < CashDropChance)
+                                    JurassicCashDrops.Add(new JurassicCashDrop(enemy.Position));
                             }
                         }
                     }
@@ -179,6 +296,8 @@ public class Simulation {
                                     Enemies.RemoveAt(k);
                                     OnEnemyKilled?.Invoke(targetEnemy.Position);
                                     XpGems.Add(new XpGem(targetEnemy.Position));
+                                    if (_rng.NextDouble() < CashDropChance)
+                                        JurassicCashDrops.Add(new JurassicCashDrop(targetEnemy.Position));
                                 }
                             }
                         }
@@ -192,6 +311,8 @@ public class Simulation {
                             Enemies.RemoveAt(j);
                             OnEnemyKilled?.Invoke(enemy.Position);
                             XpGems.Add(new XpGem(enemy.Position));
+                            if (_rng.NextDouble() < CashDropChance)
+                                JurassicCashDrops.Add(new JurassicCashDrop(enemy.Position));
                         }
                         projectile.PierceCount--;
                         if (projectile.PierceCount <= 0) {
@@ -236,12 +357,21 @@ public class Simulation {
             var dist = Vector2.Distance(PlayerPosition, gem.Position);
             if (dist <= PlayerEffectivePickupRadius) {
                 PlayerXp += gem.XpValue;
-                while (PlayerXp >= XpToNextLevel) {
-                    PlayerXp -= XpToNextLevel;
-                    PlayerLevel++;
-                }
                 OnXpGemCollected?.Invoke(gem);
                 XpGems.RemoveAt(i);
+                if (!IsPausedForLevelUp && PlayerXp >= XpToNextLevel) {
+                    PendingLevelUpOptions.AddRange(GenerateLevelUpOptions());
+                    IsPausedForLevelUp = true;
+                }
+            }
+        }
+
+        // Check player-to-Jurassic-Cash-drop collection
+        for (int i = JurassicCashDrops.Count - 1; i >= 0; i--) {
+            var drop = JurassicCashDrops[i];
+            if (Vector2.Distance(PlayerPosition, drop.Position) <= PlayerEffectivePickupRadius) {
+                UnbankedJurassicCash += drop.CashValue;
+                JurassicCashDrops.RemoveAt(i);
             }
         }
 
@@ -286,6 +416,7 @@ public class Simulation {
                     if (PlayerCurrentHp <= 0f) {
                         PlayerCurrentHp = 0f;
                         IsRunLost = true;
+                        UnbankedJurassicCash = 0;
                     }
                     enemy.ContactCooldownTimer = enemy.ContactCooldown;
                     OnPlayerDamaged?.Invoke();
@@ -311,9 +442,60 @@ public class Simulation {
 
         // Spawn logic
         _spawnTimer += deltaTime;
-        if (_spawnTimer >= SpawnInterval) {
-            _spawnTimer -= SpawnInterval;
-            SpawnEnemy();
+        var phase = GetCurrentPhase();
+        if (_spawnTimer >= phase.SpawnInterval) {
+            _spawnTimer -= phase.SpawnInterval;
+            if (Enemies.Count < LiveEnemyCap)
+                SpawnEnemy();
+        }
+
+        MergePickups();
+    }
+
+    private void MergePickups() {
+        const float mergeRadius = 30f;
+        const int mergeThreshold = 5;
+
+        bool anyMerged = true;
+        while (anyMerged) {
+            anyMerged = false;
+            for (int i = 0; i < XpGems.Count && !anyMerged; i++) {
+                var indices = new List<int> { i };
+                for (int j = 0; j < XpGems.Count; j++) {
+                    if (j != i && Vector2.Distance(XpGems[i].Position, XpGems[j].Position) <= mergeRadius)
+                        indices.Add(j);
+                }
+                if (indices.Count >= mergeThreshold) {
+                    float total = 0f;
+                    foreach (int idx in indices) total += XpGems[idx].XpValue;
+                    var pos = XpGems[i].Position;
+                    indices.Sort((a, b) => b.CompareTo(a));
+                    foreach (int idx in indices) XpGems.RemoveAt(idx);
+                    XpGems.Add(new XpGem(pos, total));
+                    anyMerged = true;
+                }
+            }
+        }
+
+        anyMerged = true;
+        while (anyMerged) {
+            anyMerged = false;
+            for (int i = 0; i < JurassicCashDrops.Count && !anyMerged; i++) {
+                var indices = new List<int> { i };
+                for (int j = 0; j < JurassicCashDrops.Count; j++) {
+                    if (j != i && Vector2.Distance(JurassicCashDrops[i].Position, JurassicCashDrops[j].Position) <= mergeRadius)
+                        indices.Add(j);
+                }
+                if (indices.Count >= mergeThreshold) {
+                    int total = 0;
+                    foreach (int idx in indices) total += JurassicCashDrops[idx].CashValue;
+                    var pos = JurassicCashDrops[i].Position;
+                    indices.Sort((a, b) => b.CompareTo(a));
+                    foreach (int idx in indices) JurassicCashDrops.RemoveAt(idx);
+                    JurassicCashDrops.Add(new JurassicCashDrop(pos, total));
+                    anyMerged = true;
+                }
+            }
         }
     }
 
@@ -332,7 +514,8 @@ public class Simulation {
             }
         }
         if (valid) {
-            Enemies.Add(new Enemy(spawnPos));
+            var type = SelectEnemyType(GetCurrentPhase());
+            Enemies.Add(new Enemy(spawnPos, type));
         }
     }
 }

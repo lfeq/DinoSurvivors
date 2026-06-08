@@ -637,8 +637,8 @@ public class SimulationTests {
         var content = new StubContentProvider();
         var sim = new Simulation(rng, persistence, content);
 
-        // Default XP to next level should be 100f (100 * Level)
-        // Drop 11 gems of value 10 each (total 110 XP)
+        // Default XP to next level: 100f (100 * Level).
+        // Drop 11 gems of value 10 each (total 110 XP) to cross the threshold.
         for (int i = 0; i < 11; i++) {
             sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
         }
@@ -646,8 +646,16 @@ public class SimulationTests {
         // Act
         sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
 
-        // Assert
+        // Assert — sim is paused waiting for player to pick a level-up option
         Assert.Empty(sim.XpGems);
+        Assert.True(sim.IsPausedForLevelUp);
+        Assert.Equal(3, sim.PendingLevelUpOptions.Count);
+        Assert.Equal(1, sim.PlayerLevel); // not yet incremented
+
+        // Selecting an option applies the level-up and rolls XP over
+        sim.SelectLevelUpOption(0);
+
+        Assert.False(sim.IsPausedForLevelUp);
         Assert.Equal(2, sim.PlayerLevel);
         Assert.Equal(10f, sim.PlayerXp); // 110 - 100 = 10 XP carried over
     }
@@ -943,6 +951,418 @@ public class SimulationTests {
         Assert.Equal(45f * 1.15f, sim.PlayerEffectivePickupRadius, 3);
         Assert.Equal(200f * 1.15f, sim.PlayerEffectiveSpeed, 3);
         Assert.Equal(100f * 1.15f, sim.PlayerEffectiveMaxHp, 3);
+    }
+
+    // --- Issue #9: Level Up Choice ---
+
+    [Fact]
+    public void CrossingXpThresholdPausesSimWithThreeOptions() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        // 10 gems × 10 XP = 100 XP; threshold at level 1 is 100 * 1 = 100
+        for (int i = 0; i < 10; i++)
+            sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
+
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.True(sim.IsPausedForLevelUp);
+        Assert.Equal(3, sim.PendingLevelUpOptions.Count);
+        Assert.Equal(1, sim.PlayerLevel); // not yet incremented — player must choose
+    }
+
+    [Fact]
+    public void SimDoesNotStepWhilePausedForLevelUp() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        // Trigger pause
+        for (int i = 0; i < 10; i++)
+            sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+        Assert.True(sim.IsPausedForLevelUp);
+
+        sim.SpawnEnemyAt(new Vector2(1200, 1000));
+        var enemyPosBefore = sim.Enemies[0].Position;
+        var playerPosBefore = sim.PlayerPosition;
+
+        // Step with movement input while paused — nothing should move
+        sim.Step(new ControlActions(new Vector2(1, 0), Vector2.Zero), 1.0f);
+
+        Assert.Equal(enemyPosBefore, sim.Enemies[0].Position);
+        Assert.Equal(playerPosBefore, sim.PlayerPosition);
+    }
+
+    [Fact]
+    public void SelectLevelUpOption_ApplyingAnyOption_LevelsUpAndUnpauses() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        for (int i = 0; i < 10; i++)
+            sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.True(sim.IsPausedForLevelUp);
+        int levelBefore = sim.PlayerLevel;
+
+        sim.SelectLevelUpOption(0);
+
+        Assert.False(sim.IsPausedForLevelUp);
+        Assert.Equal(levelBefore + 1, sim.PlayerLevel);
+        Assert.Empty(sim.PendingLevelUpOptions);
+    }
+
+    [Fact]
+    public void SelectLevelUpOption_NewWeapon_AddsWeaponToInventory() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        for (int i = 0; i < 10; i++)
+            sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.True(sim.IsPausedForLevelUp);
+        int idx = sim.PendingLevelUpOptions.FindIndex(o => o.Type == UpgradeType.NewWeapon);
+        Assert.NotEqual(-1, idx);
+
+        string weaponId = sim.PendingLevelUpOptions[idx].ItemId!;
+        int countBefore = sim.EquippedWeapons.Count;
+
+        sim.SelectLevelUpOption(idx);
+
+        Assert.Equal(countBefore + 1, sim.EquippedWeapons.Count);
+        Assert.Contains(sim.EquippedWeapons, w => w.Definition.Id == weaponId);
+    }
+
+    [Fact]
+    public void SelectLevelUpOption_PassiveUpgrade_IncreasesPassiveLevel() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        // Fill all weapon slots with max-level weapons → no weapon options in pool
+        sim.TryAddOrUpgradeWeapon("FlareGun");
+        sim.TryAddOrUpgradeWeapon("BugZapper");
+        sim.EquippedWeapons.ForEach(w => w.Level = 5);
+
+        // Fill 2 passive slots with max-level passives; SouvenirMagnet at L1 → only upgrade available
+        sim.TryAddOrUpgradePassive("FirstAidFannyPack");
+        sim.EquippedPassives[0].Level = 3;
+        sim.TryAddOrUpgradePassive("FoamDinoClaw");
+        sim.EquippedPassives[1].Level = 3;
+        sim.TryAddOrUpgradePassive("SouvenirMagnet"); // L1, upgradeable
+        var sm = sim.EquippedPassives[2];
+        Assert.Equal(1, sm.Level);
+
+        for (int i = 0; i < 10; i++)
+            sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.True(sim.IsPausedForLevelUp);
+        // Only SouvenirMagnet upgrade is eligible; it must be the first option
+        Assert.Equal(UpgradeType.PassiveUpgrade, sim.PendingLevelUpOptions[0].Type);
+        Assert.Equal("SouvenirMagnet", sim.PendingLevelUpOptions[0].ItemId);
+
+        sim.SelectLevelUpOption(0);
+
+        Assert.False(sim.IsPausedForLevelUp);
+        Assert.Equal(2, sm.Level);
+    }
+
+    [Fact]
+    public void FullWeaponSlots_ExcludeNewWeaponOptions() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        sim.TryAddOrUpgradeWeapon("FlareGun");
+        sim.TryAddOrUpgradeWeapon("BugZapper"); // 3 slots full
+
+        for (int i = 0; i < 10; i++)
+            sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.True(sim.IsPausedForLevelUp);
+        Assert.DoesNotContain(sim.PendingLevelUpOptions, o => o.Type == UpgradeType.NewWeapon);
+    }
+
+    [Fact]
+    public void FullPassiveSlots_ExcludeNewPassiveOptions() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        sim.TryAddOrUpgradePassive("SouvenirMagnet");
+        sim.TryAddOrUpgradePassive("RunningShoes");
+        sim.TryAddOrUpgradePassive("EnergyDrink"); // 3 slots full
+
+        for (int i = 0; i < 10; i++)
+            sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.True(sim.IsPausedForLevelUp);
+        Assert.DoesNotContain(sim.PendingLevelUpOptions, o => o.Type == UpgradeType.NewPassive);
+    }
+
+    [Fact]
+    public void CategoryBalancing_WhenAllPicksAreWeapons_SwapsOneForPassive() {
+        // StubRng.NextValue = 0 always picks index 0 from the remaining pool.
+        // Pool with all 3 weapon slots full (upgrades only) + 5 passive options:
+        //   [TP-Upgrade, FG-Upgrade, BZ-Upgrade, P1-New, P2-New, P3-New, P4-New, P5-New]
+        // Picking index 0 three times yields [TP-Upgrade, FG-Upgrade, BZ-Upgrade] — all weapons.
+        // Category balancing must swap one for the first available passive.
+        var rng = new StubRng { NextValue = 0 };
+        var sim = new Simulation(rng, new StubPersistence(), new StubContentProvider());
+
+        sim.TryAddOrUpgradeWeapon("FlareGun");
+        sim.TryAddOrUpgradeWeapon("BugZapper"); // 3 slots full, all at L1
+
+        for (int i = 0; i < 10; i++)
+            sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.True(sim.IsPausedForLevelUp);
+        bool hasPassive = sim.PendingLevelUpOptions.Any(o =>
+            o.Type == UpgradeType.NewPassive || o.Type == UpgradeType.PassiveUpgrade);
+        Assert.True(hasPassive, "Category balancing should have introduced at least one passive option");
+    }
+
+    [Fact]
+    public void CashFallback_WhenNoEligibleUpgradesRemain_AllOptionsAreFallback() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        // Max out all weapons
+        sim.TryAddOrUpgradeWeapon("FlareGun");
+        sim.TryAddOrUpgradeWeapon("BugZapper");
+        sim.EquippedWeapons.ForEach(w => w.Level = 5);
+
+        // Max out all passives
+        sim.TryAddOrUpgradePassive("SouvenirMagnet");
+        sim.TryAddOrUpgradePassive("RunningShoes");
+        sim.TryAddOrUpgradePassive("EnergyDrink");
+        sim.EquippedPassives.ForEach(p => p.Level = 3);
+
+        for (int i = 0; i < 10; i++)
+            sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.True(sim.IsPausedForLevelUp);
+        Assert.All(sim.PendingLevelUpOptions, o => Assert.Equal(UpgradeType.CashFallback, o.Type));
+    }
+
+    [Fact]
+    public void SelectingCashFallback_GrantsCashNotHealing() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        // Force all fallback options
+        sim.TryAddOrUpgradeWeapon("FlareGun");
+        sim.TryAddOrUpgradeWeapon("BugZapper");
+        sim.EquippedWeapons.ForEach(w => w.Level = 5);
+        sim.TryAddOrUpgradePassive("SouvenirMagnet");
+        sim.TryAddOrUpgradePassive("RunningShoes");
+        sim.TryAddOrUpgradePassive("EnergyDrink");
+        sim.EquippedPassives.ForEach(p => p.Level = 3);
+
+        for (int i = 0; i < 10; i++)
+            sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        float hpBefore = sim.PlayerCurrentHp;
+        Assert.Equal(0, sim.UnbankedJurassicCash);
+
+        sim.SelectLevelUpOption(0);
+
+        Assert.False(sim.IsPausedForLevelUp);
+        Assert.Equal(25, sim.UnbankedJurassicCash);
+        Assert.Equal(hpBefore, sim.PlayerCurrentHp); // no healing
+    }
+
+    // --- Issue #11: Jurassic Cash ---
+
+    [Fact]
+    public void EnemyKilledWithLowRng_DropsJurassicCash() {
+        // NextDoubleValue = 0.1 < 0.20 drop threshold → cash should drop
+        var rng = new StubRng { NextDoubleValue = 0.1 };
+        var sim = new Simulation(rng, new StubPersistence(), new StubContentProvider());
+
+        sim.SpawnEnemyAt(new Vector2(1000, 1100));
+        sim.Enemies[0].Hp = 10f;
+
+        var proj = new Projectile(new Vector2(1000, 1095), new Vector2(0, 1));
+        sim.Projectiles.Add(proj);
+
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0f);
+
+        Assert.Empty(sim.Enemies);
+        Assert.Single(sim.JurassicCashDrops);
+        Assert.Equal(new Vector2(1000, 1100), sim.JurassicCashDrops[0].Position);
+    }
+
+    [Fact]
+    public void EnemyKilledWithHighRng_NoJurassicCashDrop() {
+        // NextDoubleValue = 0.9 >= 0.20 threshold → no cash drop
+        var rng = new StubRng { NextDoubleValue = 0.9 };
+        var sim = new Simulation(rng, new StubPersistence(), new StubContentProvider());
+
+        sim.SpawnEnemyAt(new Vector2(1000, 1100));
+        sim.Enemies[0].Hp = 10f;
+
+        var proj = new Projectile(new Vector2(1000, 1095), new Vector2(0, 1));
+        sim.Projectiles.Add(proj);
+
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0f);
+
+        Assert.Empty(sim.Enemies);
+        Assert.Empty(sim.JurassicCashDrops);
+    }
+
+    [Fact]
+    public void JurassicCashDropCollectedWithinPickupRadius_IncreasesUnbankedCash() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        // Place a drop 30 units from player (within default pickup radius of 45)
+        sim.JurassicCashDrops.Add(new JurassicCashDrop(new Vector2(1000, 1030), 5));
+
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.Empty(sim.JurassicCashDrops);
+        Assert.Equal(5, sim.UnbankedJurassicCash);
+    }
+
+    [Fact]
+    public void JurassicCashDropNotCollectedOutsidePickupRadius_PersistsOnGround() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        // Place a drop 60 units from player (outside default pickup radius of 45)
+        sim.JurassicCashDrops.Add(new JurassicCashDrop(new Vector2(1000, 1060), 5));
+
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.Single(sim.JurassicCashDrops);
+        Assert.Equal(0, sim.UnbankedJurassicCash);
+    }
+
+    [Fact]
+    public void DyingClearsUnbankedJurassicCash() {
+        var rng = new StubRng { NextDoubleValue = 0.1 }; // low RNG to allow cash drops
+        var sim = new Simulation(rng, new StubPersistence(), new StubContentProvider());
+
+        // Kill an enemy to earn some cash (low RNG → drops), then collect it
+        sim.SpawnEnemyAt(new Vector2(1000, 1100));
+        sim.Enemies[0].Hp = 10f;
+        var proj = new Projectile(new Vector2(1000, 1095), new Vector2(0, 1));
+        sim.Projectiles.Add(proj);
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0f);
+
+        // Move the drop to player's feet and collect it
+        sim.JurassicCashDrops[0] = new JurassicCashDrop(sim.PlayerPosition, 5);
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+        Assert.Equal(5, sim.UnbankedJurassicCash); // cash accumulated
+
+        // Now kill the player: spawn 10 enemies on top
+        for (int i = 0; i < 10; i++)
+            sim.SpawnEnemyAt(sim.PlayerPosition);
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.True(sim.IsRunLost);
+        Assert.Equal(0, sim.UnbankedJurassicCash);
+    }
+
+    // --- Issue #13: Wave Schedule + Live Enemy Cap + Pickup Merging ---
+
+    [Fact]
+    public void Raptor_HasHigherSpeedDamageAndHpThanCompy() {
+        var compy = new Enemy(Vector2.Zero, EnemyType.Compy);
+        var raptor = new Enemy(Vector2.Zero, EnemyType.Raptor);
+        Assert.True(raptor.Speed > compy.Speed);
+        Assert.True(raptor.Damage > compy.Damage);
+        Assert.True(raptor.Hp > compy.Hp);
+    }
+
+    [Fact]
+    public void Triceratops_IsSlowerWithHigherHpAndDamage() {
+        var compy = new Enemy(Vector2.Zero, EnemyType.Compy);
+        var trice = new Enemy(Vector2.Zero, EnemyType.Triceratops);
+        Assert.True(trice.Speed < compy.Speed);
+        Assert.True(trice.Hp > compy.Hp);
+        Assert.True(trice.Damage > compy.Damage);
+    }
+
+    [Fact]
+    public void Stage1Early_AutoSpawn_ProducesCompy() {
+        var rng = new StubRng { NextValue = 0, NextDoubleValue = 0.5 };
+        var sim = new Simulation(rng, new StubPersistence(), new StubContentProvider());
+        // StageTimeElapsed = 0: Stage 1 early phase — Compies only
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 1.6f);
+        Assert.Single(sim.Enemies);
+        Assert.Equal(EnemyType.Compy, sim.Enemies[0].Type);
+    }
+
+    [Fact]
+    public void Stage1Late_AutoSpawn_ProducesRaptor_WhenRngSelectsRaptorWeight() {
+        // Stage 1 late phase: Compy weight=70, Raptor weight=30, total=100
+        // NextValue=80 → roll 80 >= 70 cumulative Compy weight → picks Raptor
+        var rng = new StubRng { NextValue = 80, NextDoubleValue = 0.5 };
+        var sim = new Simulation(rng, new StubPersistence(), new StubContentProvider());
+        sim.StageTimeElapsed = 8 * 60f; // 8 minutes = late phase
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 1.6f);
+        Assert.Single(sim.Enemies);
+        Assert.Equal(EnemyType.Raptor, sim.Enemies[0].Type);
+    }
+
+    [Fact]
+    public void LiveEnemyCap_PreventsSpawningBeyondCap() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        // Fill enemies to the stage-1 cap (80), spread out so no damage occurs
+        for (int i = 0; i < sim.LiveEnemyCap; i++)
+            sim.Enemies.Add(new Enemy(new Vector2(i * 30f, 0)));
+        int countAtCap = sim.Enemies.Count;
+
+        // Step past spawn interval — no new enemy should appear
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 1.6f);
+
+        Assert.Equal(countAtCap, sim.Enemies.Count);
+    }
+
+    [Fact]
+    public void FiveOrMoreNearbyXpGems_MergeIntoOne() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        // Place 5 gems clustered within 30f of each other, far from player (no collection)
+        for (int i = 0; i < 5; i++)
+            sim.XpGems.Add(new XpGem(new Vector2(500 + i * 5f, 500), 10f));
+
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.Single(sim.XpGems);
+        Assert.Equal(50f, sim.XpGems[0].XpValue);
+    }
+
+    [Fact]
+    public void FiveOrMoreNearbyCashDrops_MergeIntoOne() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        for (int i = 0; i < 5; i++)
+            sim.JurassicCashDrops.Add(new JurassicCashDrop(new Vector2(500 + i * 5f, 500), 5));
+
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.Single(sim.JurassicCashDrops);
+        Assert.Equal(25, sim.JurassicCashDrops[0].CashValue);
+    }
+
+    [Fact]
+    public void FourOrFewerNearbyXpGems_DoNotMerge() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        for (int i = 0; i < 4; i++)
+            sim.XpGems.Add(new XpGem(new Vector2(500 + i * 5f, 500), 10f));
+
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.Equal(4, sim.XpGems.Count);
+    }
+
+    [Fact]
+    public void XpToNextLevelRisesAfterEachLevelUp() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        Assert.Equal(100f, sim.XpToNextLevel); // Level 1
+
+        for (int i = 0; i < 10; i++)
+            sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+        sim.SelectLevelUpOption(0);
+
+        Assert.Equal(2, sim.PlayerLevel);
+        Assert.Equal(200f, sim.XpToNextLevel); // Level 2: 100 * 2
     }
 }
 
