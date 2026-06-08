@@ -96,3 +96,22 @@
 - Added 8 new headless xUnit tests: Raptor stats, Triceratops stats, Stage 1 early spawn → Compy, Stage 1 late spawn → Raptor (with high NextValue RNG), LiveEnemyCap blocks spawning, 5+ nearby gems merge, 5+ nearby drops merge, 4 nearby gems do not merge.
 - All 61 tests pass (53 pre-existing + 8 new).
 - Closed issue #13.
+- Implemented Stage lifecycle: Stage Exit + Safehouse Break + multi-stage run (Issue #14).
+- Added SafehouseRewardType enum (PartialHeal, BankedCashBonus, BonusXp) and SafehouseRewardOption class to Interfaces.cs.
+- Added to Simulation: IsStageExitRevealed, SafehousePosition, ExitMarkerDirection (computed), IsPausedForSafehouseBreak, PendingSafehouseBreakOptions, IsRunComplete, and constants StageExitRevealTime (600f) / SafehouseZoneRadius (60f).
+- RevealSafehouse() places a boundary-side Safehouse using _rng (edge + offset); called automatically when StageTimeElapsed >= 600s.
+- EnterSafehouse() triggered at end of Step() when player is within SafehouseZoneRadius: banks Unbanked cash, clears enemies/XpGems/JurassicCashDrops/Projectiles, generates 3 reward options, sets IsPausedForSafehouseBreak.
+- SelectSafehouseRewardOption(int index): applies chosen reward, advances StageNumber (1→2→3) with carry-forward (weapons, passives, HP, banked cash) and cleared stage state, or sets IsRunComplete = true after stage 3.
+- Added IsPausedForSafehouseBreak to Step() early-return guard so simulation freezes during break.
+- Added 14 new headless xUnit tests covering reveal timing, boundary placement, continued spawning post-reveal, ExitMarkerDirection, zone-entry banking, pause state, all three reward types, no-step-while-paused, each reward behavior, stage advance with carry-forward, abandoned pickups on exit, and IsRunComplete after stage 3.
+- All 75 tests pass (61 pre-existing + 14 new).
+- Closed issue #14.
+- Implemented Heliport Stage + T-Rex Boss + Win Condition (Issue #16).
+- Stage 3 safehouse no longer ends the run; instead it advances to Stage 4 (HeliportStageNumber=4) and spawns a T-Rex at BossArenaCenter (1000, 1000).
+- Added TRex class to Interfaces.cs with phase-based attack state machine (3 phases by HP%: >66%=P1, >33%=P2, else P3), attack states (Idle/Charging/Roaring/TailSweeping/SummoningWaves), and phase-sequenced per-phase attack patterns.
+- Added Boss Arena Lock-In: IsBossArenaLocked activates when player enters 600f radius; player is clamped inside until T-Rex is defeated.
+- Win condition: after T-Rex defeated, a chopper zone appears at BossArenaCenter (80f radius); touching it sets IsRunComplete=true.
+- T-Rex attacks: Charging (moves at 350f toward player), Roaring (15 DPS AoE within 200f), TailSweep (40 instant damage within 250f on enter), SummoningWaves (spawns 3 Raptors near T-Rex).
+- Added 24 new headless xUnit tests covering all boss behaviors.
+- All 99 tests pass (75 pre-existing + 24 new).
+- Closed issue #16.

@@ -41,7 +41,51 @@ public class Simulation {
 
     public int StageNumber { get; set; } = 1;
     public float StageTimeElapsed { get; set; } = 0f;
-    public int LiveEnemyCap => StageNumber switch { 2 => 100, 3 => 120, _ => 80 };
+    public int LiveEnemyCap => StageNumber switch { 2 => 100, 3 => 120, HeliportStageNumber => 60, _ => 80 };
+
+    public const float StageExitRevealTime = 600f;
+    public const float SafehouseZoneRadius = 60f;
+    public bool IsStageExitRevealed { get; private set; }
+    public Vector2 SafehousePosition { get; private set; }
+    public Vector2 ExitMarkerDirection {
+        get {
+            if (!IsStageExitRevealed) return Vector2.Zero;
+            var dir = SafehousePosition - PlayerPosition;
+            return dir.LengthSquared() > 0f ? Vector2.Normalize(dir) : Vector2.Zero;
+        }
+    }
+
+    public bool IsPausedForSafehouseBreak { get; private set; }
+    public List<SafehouseRewardOption> PendingSafehouseBreakOptions { get; } = new();
+    public bool IsRunComplete { get; private set; }
+
+    public const int HeliportStageNumber = 4;
+    public TRex? TRex { get; set; }
+    public Vector2 BossArenaCenter => ArenaSize / 2f;
+    public float BossArenaRadius { get; } = 600f;
+    public bool IsBossArenaLocked { get; private set; }
+    public Vector2 ChopperZonePosition => BossArenaCenter;
+    public float ChopperZoneRadius { get; } = 80f;
+    public bool IsChopperZoneRevealed => TRex?.IsDefeated ?? false;
+    public event Action? OnTRexDefeated;
+
+    public bool IsPaused { get; private set; } = false;
+    public bool IsAutoFireEnabled { get; set; } = true;
+    public bool ShowFloatingDamageNumbers { get; set; } = true;
+
+    public void TogglePause() {
+        IsPaused = !IsPaused;
+    }
+
+    public void QuitRun() {
+        UnbankedJurassicCash = 0;
+        EquippedPassives.Clear();
+        EquippedWeapons.Clear();
+        var startingWeaponDef = _content.GetWeaponDefinition("TranqPistol");
+        if (startingWeaponDef != null)
+            EquippedWeapons.Add(new WeaponInstance(startingWeaponDef, 1));
+        IsRunLost = true;
+    }
 
     private readonly IRng _rng;
     private readonly IContentProvider _content;
@@ -205,11 +249,14 @@ public class Simulation {
     }
 
     public void Step(ControlActions actions, float deltaTime) {
-        if (IsRunLost || IsPausedForLevelUp) {
+        if (IsRunLost || IsPaused || IsPausedForLevelUp || IsPausedForSafehouseBreak) {
             return;
         }
 
         StageTimeElapsed += deltaTime;
+
+        if (!IsStageExitRevealed && StageTimeElapsed >= StageExitRevealTime && StageNumber < HeliportStageNumber)
+            RevealSafehouse();
 
         // Firing logic for equipped weapons
         foreach (var weapon in EquippedWeapons) {
@@ -221,8 +268,9 @@ public class Simulation {
             }
 
             if (weapon.CooldownTimer <= 0f) {
+                bool canFire = IsAutoFireEnabled || actions.Fire;
                 if (weapon.Definition.IsAimed) {
-                    if (actions.AimDirection != Vector2.Zero) {
+                    if (canFire && actions.AimDirection != Vector2.Zero) {
                         var aimDir = actions.AimDirection;
                         if (aimDir.LengthSquared() > 1f) {
                             aimDir = Vector2.Normalize(aimDir);
@@ -450,6 +498,14 @@ public class Simulation {
         }
 
         MergePickups();
+
+        if (StageNumber < HeliportStageNumber && IsStageExitRevealed && !IsRunLost &&
+            Vector2.Distance(PlayerPosition, SafehousePosition) <= SafehouseZoneRadius)
+            EnterSafehouse();
+
+        // Heliport stage: T-Rex boss fight
+        if (StageNumber == HeliportStageNumber && TRex != null)
+            UpdateHeliportStage(TRex, deltaTime);
     }
 
     private void MergePickups() {
@@ -495,6 +551,248 @@ public class Simulation {
                     JurassicCashDrops.Add(new JurassicCashDrop(pos, total));
                     anyMerged = true;
                 }
+            }
+        }
+    }
+
+    private void RevealSafehouse() {
+        int edge = _rng.Next(0, 4);
+        float t = (float)_rng.NextDouble();
+        SafehousePosition = edge switch {
+            0 => new Vector2(t * ArenaSize.X, 0),
+            1 => new Vector2(ArenaSize.X, t * ArenaSize.Y),
+            2 => new Vector2(t * ArenaSize.X, ArenaSize.Y),
+            _ => new Vector2(0, t * ArenaSize.Y)
+        };
+        IsStageExitRevealed = true;
+    }
+
+    private void EnterSafehouse() {
+        BankedJurassicCash += UnbankedJurassicCash;
+        UnbankedJurassicCash = 0;
+        XpGems.Clear();
+        JurassicCashDrops.Clear();
+        Enemies.Clear();
+        Projectiles.Clear();
+        _spawnTimer = 0f;
+
+        PendingSafehouseBreakOptions.Clear();
+        PendingSafehouseBreakOptions.Add(new SafehouseRewardOption { Type = SafehouseRewardType.PartialHeal, Amount = 20f });
+        PendingSafehouseBreakOptions.Add(new SafehouseRewardOption { Type = SafehouseRewardType.BankedCashBonus, Amount = 50f });
+        PendingSafehouseBreakOptions.Add(new SafehouseRewardOption { Type = SafehouseRewardType.BonusXp, Amount = 50f });
+
+        IsPausedForSafehouseBreak = true;
+    }
+
+    public void SelectSafehouseRewardOption(int index) {
+        if (!IsPausedForSafehouseBreak || index < 0 || index >= PendingSafehouseBreakOptions.Count) return;
+
+        var option = PendingSafehouseBreakOptions[index];
+        switch (option.Type) {
+            case SafehouseRewardType.PartialHeal:
+                PlayerCurrentHp = System.Math.Min(PlayerCurrentHp + option.Amount, PlayerEffectiveMaxHp);
+                break;
+            case SafehouseRewardType.BankedCashBonus:
+                BankedJurassicCash += (int)option.Amount;
+                break;
+            case SafehouseRewardType.BonusXp:
+                PlayerXp += option.Amount;
+                if (!IsPausedForLevelUp && PlayerXp >= XpToNextLevel) {
+                    PendingLevelUpOptions.AddRange(GenerateLevelUpOptions());
+                    IsPausedForLevelUp = true;
+                }
+                break;
+        }
+
+        PendingSafehouseBreakOptions.Clear();
+        IsPausedForSafehouseBreak = false;
+
+        if (StageNumber < 3) {
+            StageNumber++;
+            StageTimeElapsed = 0f;
+            IsStageExitRevealed = false;
+        } else if (StageNumber == 3) {
+            StageNumber = HeliportStageNumber;
+            StageTimeElapsed = 0f;
+            IsStageExitRevealed = false;
+            IsBossArenaLocked = false;
+            TRex = new TRex(BossArenaCenter);
+        } else {
+            IsRunComplete = true;
+        }
+    }
+
+    private static readonly (TRexAttackState State, float Duration)[][] TRexPhaseSequences = {
+        new[] { // Phase 1: Idle → Charge → Idle → Summon
+            (TRexAttackState.Idle, 1.5f),
+            (TRexAttackState.Charging, 2.0f),
+            (TRexAttackState.Idle, 1.5f),
+            (TRexAttackState.SummoningWaves, 2.0f),
+        },
+        new[] { // Phase 2: adds Roar
+            (TRexAttackState.Idle, 1.5f),
+            (TRexAttackState.Charging, 2.0f),
+            (TRexAttackState.Idle, 1.0f),
+            (TRexAttackState.Roaring, 2.5f),
+            (TRexAttackState.Idle, 1.0f),
+            (TRexAttackState.SummoningWaves, 2.0f),
+        },
+        new[] { // Phase 3: adds TailSweep, faster pace
+            (TRexAttackState.Idle, 1.0f),
+            (TRexAttackState.Charging, 2.0f),
+            (TRexAttackState.Idle, 0.5f),
+            (TRexAttackState.Roaring, 2.5f),
+            (TRexAttackState.Idle, 0.5f),
+            (TRexAttackState.TailSweeping, 1.5f),
+            (TRexAttackState.Idle, 0.5f),
+            (TRexAttackState.SummoningWaves, 2.0f),
+        }
+    };
+
+    private void UpdateHeliportStage(TRex trex, float deltaTime) {
+        // Trigger lock-in when player enters boss arena
+        if (!IsBossArenaLocked && !trex.IsDefeated &&
+            Vector2.Distance(PlayerPosition, BossArenaCenter) <= BossArenaRadius)
+            IsBossArenaLocked = true;
+
+        if (!trex.IsDefeated) {
+            UpdateTRex(trex, deltaTime);
+
+            // Projectile hits on T-Rex
+            for (int i = Projectiles.Count - 1; i >= 0; i--) {
+                var proj = Projectiles[i];
+                if (Vector2.Distance(proj.Position, trex.Position) < proj.Radius + trex.Radius) {
+                    trex.Hp -= proj.Damage;
+                    trex.HitFlashTimer = 0.15f;
+                    Projectiles.RemoveAt(i);
+                    if (trex.IsDefeated) {
+                        IsBossArenaLocked = false;
+                        OnTRexDefeated?.Invoke();
+                        break;
+                    }
+                }
+            }
+
+            // T-Rex contact damage to player
+            if (!trex.IsDefeated && !IsRunLost) {
+                const float playerRadius = 16f;
+                var distToPlayer = Vector2.Distance(PlayerPosition, trex.Position);
+                if (distToPlayer < trex.Radius + playerRadius) {
+                    if (trex.ContactCooldownTimer <= 0f) {
+                        PlayerCurrentHp -= trex.Damage;
+                        if (PlayerCurrentHp <= 0f) {
+                            PlayerCurrentHp = 0f;
+                            IsRunLost = true;
+                            UnbankedJurassicCash = 0;
+                        }
+                        trex.ContactCooldownTimer = trex.ContactCooldown;
+                        OnPlayerDamaged?.Invoke();
+                    }
+                    if (distToPlayer > 0.0001f) {
+                        var pushDir = Vector2.Normalize(PlayerPosition - trex.Position);
+                        PlayerPosition += pushDir * (trex.Radius + playerRadius - distToPlayer) * 0.2f;
+                    }
+                }
+            }
+        }
+
+        // Boss arena clamp while locked in
+        if (IsBossArenaLocked) {
+            var fromCenter = PlayerPosition - BossArenaCenter;
+            if (fromCenter.LengthSquared() > BossArenaRadius * BossArenaRadius)
+                PlayerPosition = BossArenaCenter + Vector2.Normalize(fromCenter) * BossArenaRadius;
+        }
+
+        // Win condition: touch chopper zone after T-Rex defeated
+        if (!IsRunLost && trex.IsDefeated &&
+            Vector2.Distance(PlayerPosition, ChopperZonePosition) <= ChopperZoneRadius) {
+            BankedJurassicCash += UnbankedJurassicCash;
+            UnbankedJurassicCash = 0;
+            IsRunComplete = true;
+        }
+    }
+
+    private void UpdateTRex(TRex trex, float deltaTime) {
+        if (trex.ContactCooldownTimer > 0f)
+            trex.ContactCooldownTimer = MathF.Max(0f, trex.ContactCooldownTimer - deltaTime);
+        if (trex.HitFlashTimer > 0f)
+            trex.HitFlashTimer = MathF.Max(0f, trex.HitFlashTimer - deltaTime);
+
+        // Detect phase change and reset attack sequence
+        int phase = trex.Phase;
+        if (phase != trex.LastPhase) {
+            trex.LastPhase = phase;
+            trex.AttackSequenceIndex = 0;
+            trex.AttackTimer = 0f;
+            trex.AttackState = TRexAttackState.Idle;
+        }
+
+        var sequence = TRexPhaseSequences[phase - 1];
+        var (targetState, duration) = sequence[trex.AttackSequenceIndex];
+
+        // On state entry: fire enter logic
+        if (trex.AttackState != targetState) {
+            trex.AttackState = targetState;
+            OnEnterTRexState(trex, targetState);
+        }
+
+        // Per-frame state behavior
+        switch (trex.AttackState) {
+            case TRexAttackState.Charging: {
+                var toPlayer = PlayerPosition - trex.Position;
+                if (toPlayer.LengthSquared() > 0.0001f)
+                    trex.Position += Vector2.Normalize(toPlayer) * trex.ChargeSpeed * deltaTime;
+                trex.Position = Vector2.Clamp(trex.Position, Vector2.Zero, ArenaSize);
+                break;
+            }
+            case TRexAttackState.Roaring: {
+                if (!IsRunLost && Vector2.Distance(PlayerPosition, trex.Position) <= trex.RoarRadius) {
+                    PlayerCurrentHp -= trex.RoarDamagePerSecond * deltaTime;
+                    if (PlayerCurrentHp <= 0f) {
+                        PlayerCurrentHp = 0f;
+                        IsRunLost = true;
+                        UnbankedJurassicCash = 0;
+                    }
+                    OnPlayerDamaged?.Invoke();
+                }
+                break;
+            }
+        }
+
+        // Advance attack timer
+        trex.AttackTimer += deltaTime;
+        if (trex.AttackTimer >= duration) {
+            trex.AttackTimer -= duration;
+            trex.AttackSequenceIndex = (trex.AttackSequenceIndex + 1) % sequence.Length;
+        }
+    }
+
+    private void OnEnterTRexState(TRex trex, TRexAttackState state) {
+        switch (state) {
+            case TRexAttackState.TailSweeping: {
+                // Instant radial damage to player within sweep radius
+                var fromTrex = PlayerPosition - trex.Position;
+                if (!IsRunLost && fromTrex.LengthSquared() <= trex.TailSweepRadius * trex.TailSweepRadius) {
+                    PlayerCurrentHp -= trex.TailSweepDamage;
+                    if (PlayerCurrentHp <= 0f) {
+                        PlayerCurrentHp = 0f;
+                        IsRunLost = true;
+                        UnbankedJurassicCash = 0;
+                    }
+                    OnPlayerDamaged?.Invoke();
+                }
+                break;
+            }
+            case TRexAttackState.SummoningWaves: {
+                for (int i = 0; i < trex.SummonCount; i++) {
+                    double angle = _rng.NextDouble() * 2 * System.Math.PI;
+                    var offset = new Vector2(
+                        (float)(System.Math.Cos(angle) * 120f),
+                        (float)(System.Math.Sin(angle) * 120f));
+                    var spawnPos = Vector2.Clamp(trex.Position + offset, Vector2.Zero, ArenaSize);
+                    Enemies.Add(new Enemy(spawnPos, EnemyType.Raptor));
+                }
+                break;
             }
         }
     }
