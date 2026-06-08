@@ -1,5 +1,7 @@
 namespace DinoSurvivors.Core;
 
+public enum EnemyType { Compy, Raptor, Triceratops }
+
 public interface IRng {
     double NextDouble();
     int Next(int minValue, int maxValue);
@@ -93,6 +95,20 @@ public class NullContentProvider : IContentProvider {
 }
 
 public static class DefaultContent {
+    public static Dictionary<int, WavePhase[]> WaveSchedules { get; } = new() {
+        { 1, new[] {
+            new WavePhase { StartTime = 0f,   SpawnInterval = 1.5f, Weights = new[] { (EnemyType.Compy, 100) } },
+            new WavePhase { StartTime = 480f, SpawnInterval = 1.2f, Weights = new[] { (EnemyType.Compy, 70), (EnemyType.Raptor, 30) } }
+        }},
+        { 2, new[] {
+            new WavePhase { StartTime = 0f,   SpawnInterval = 1.3f, Weights = new[] { (EnemyType.Compy, 30), (EnemyType.Raptor, 70) } },
+            new WavePhase { StartTime = 240f, SpawnInterval = 1.1f, Weights = new[] { (EnemyType.Compy, 20), (EnemyType.Raptor, 50), (EnemyType.Triceratops, 30) } }
+        }},
+        { 3, new[] {
+            new WavePhase { StartTime = 0f,   SpawnInterval = 0.9f, Weights = new[] { (EnemyType.Compy, 20), (EnemyType.Raptor, 40), (EnemyType.Triceratops, 40) } }
+        }}
+    };
+
     private static List<PassiveLevelData> BuffLevels() => new() {
         new() { Multiplier = 1.15f },
         new() { Multiplier = 1.30f },
@@ -163,6 +179,19 @@ public static class DefaultContent {
             }
         }
     };
+}
+
+public class WavePhase {
+    public float StartTime { get; init; }
+    public float SpawnInterval { get; init; }
+    public (EnemyType Type, int Weight)[] Weights { get; init; } = Array.Empty<(EnemyType, int)>();
+}
+
+public enum UpgradeType { NewWeapon, WeaponUpgrade, NewPassive, PassiveUpgrade, CashFallback }
+
+public class UpgradeOption {
+    public UpgradeType Type { get; init; }
+    public string? ItemId { get; init; }
 }
 
 public class WeaponInstance {
