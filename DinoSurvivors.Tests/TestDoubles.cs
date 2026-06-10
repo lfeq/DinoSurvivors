@@ -11,6 +11,13 @@ public class StubRng : IRng {
 }
 
 public class StubPersistence : IPersistence {
+    public SaveData Data { get; set; } = new SaveData();
+
+    public SaveData Load() => Data;
+    public void Save(SaveData data) {
+        var json = System.Text.Json.JsonSerializer.Serialize(data);
+        Data = System.Text.Json.JsonSerializer.Deserialize<SaveData>(json) ?? new SaveData();
+    }
 }
 
 public class StubContentProvider : IContentProvider {

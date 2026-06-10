@@ -9,7 +9,24 @@ public interface IRng {
     int Next(int minValue, int maxValue);
 }
 
+public class BestRunSummary {
+    public int MaxStageReached { get; set; } = 1;
+    public int MaxLevelReached { get; set; } = 1;
+    public float MaxTimeSurvived { get; set; } = 0f;
+    public int MaxCashCollected { get; set; } = 0;
+}
+
+public class SaveData {
+    public int BankedJurassicCash { get; set; } = 0;
+    public System.Collections.Generic.Dictionary<string, int> PermanentUpgradeRanks { get; set; } = new();
+    public bool IsAutoFireEnabled { get; set; } = true;
+    public bool ShowFloatingDamageNumbers { get; set; } = true;
+    public BestRunSummary BestRun { get; set; } = new();
+}
+
 public interface IPersistence {
+    SaveData Load();
+    void Save(SaveData data);
 }
 
 public class SystemRng : IRng {
@@ -24,6 +41,12 @@ public class SystemRng : IRng {
 }
 
 public class NullPersistence : IPersistence {
+    private SaveData _data = new();
+
+    public SaveData Load() => _data;
+    public void Save(SaveData data) {
+        _data = data;
+    }
 }
 
 public class WeaponLevelData {

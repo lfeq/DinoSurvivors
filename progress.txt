@@ -115,3 +115,22 @@
 - Added 24 new headless xUnit tests covering all boss behaviors.
 - All 99 tests pass (75 pre-existing + 24 new).
 - Closed issue #16.
+- Implemented Level Up Choice menu in view (Game1) (Issue #22).
+- Added GetUpgradeOptionLabel helper in Simulation to generate capitalized upgrade labels (e.g. "FLARE GUN - LV 1->2" or "+25 JURASSIC CASH").
+- Added 3 new unit tests in SimulationTests.cs to cover label generation for NewWeapon, WeaponUpgrade, and Passive/Fallback cases.
+- Extended hand-rolled pixel font in Game1.cs to cover A-Z, space, +, -, and > symbols, replacing old digit-only arrays.
+- Integrated dim modal overlay, title/subtitle, selection highlights, and mouse/keyboard selection input (1/2/3, W/S/Up/Down + Enter, and mouse clicks) inside Game1.cs.
+- All 102 tests pass (99 pre-existing + 3 new).
+- Closed issue #22.
+- Implemented Save Data + Souvenir Shop + Permanent Upgrades (Issue #15) using /tdd.
+- Defined SaveData and BestRunSummary classes and updated the IPersistence interface in Interfaces.cs.
+- Implemented the JSON file-backed FilePersistence in DinoSurvivors.Core and memory-based serialization inside StubPersistence in TestDoubles.cs.
+- Integrated IPersistence in Simulation constructor to load/initialize save data, and mapped BankedJurassicCash, IsAutoFireEnabled, and ShowFloatingDamageNumbers properties to delegating SaveData fields.
+- Implemented shop methods: querying permanent upgrade ranks (GetPermanentUpgradeRank), price escalation calculation (GetPermanentUpgradeCost: 100 / 250 / 500 cash), and purchasing (BuyPermanentUpgrade).
+- Applied permanent upgrade multipliers to player baseline stats (max HP, movement speed, pickup radius) and compounded them with active passive items.
+- Integrated permanent upgrade multipliers to weapon firing step (projectile damage, weapon cooldowns, autonomous zapper damage).
+- Added best run summary tracking (maximum stage, player level, survived time, and cash collected) and triggered automatic saves on run endings (win, loss, or quit).
+- Connected the real FilePersistence("save.json") inside Game1.cs.
+- Added 7 new headless xUnit tests covering round-trip serialization, save loading, shop purchase deduction, cost escalation, baseline stat composition, combat stat composition, and best run updating.
+- All 109 tests pass (102 pre-existing + 7 new).
+- Closed issue #15.

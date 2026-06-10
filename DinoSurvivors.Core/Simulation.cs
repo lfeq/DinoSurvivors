@@ -26,17 +26,39 @@ public class Simulation {
     public bool IsPausedForLevelUp { get; private set; } = false;
     public List<UpgradeOption> PendingLevelUpOptions { get; } = new();
     public int UnbankedJurassicCash { get; private set; } = 0;
-    public int BankedJurassicCash { get; private set; } = 0;
+    public int BankedJurassicCash {
+        get => _saveData.BankedJurassicCash;
+        private set => _saveData.BankedJurassicCash = value;
+    }
     public List<JurassicCashDrop> JurassicCashDrops { get; } = new();
     private const float CashDropChance = 0.20f;
 
-    public float PlayerEffectivePickupRadius => PlayerPickupRadius * GetPassiveMultiplier(PassiveStat.PickupRadius);
-    public float PlayerEffectiveSpeed => PlayerSpeed * GetPassiveMultiplier(PassiveStat.MoveSpeed);
-    public float PlayerEffectiveMaxHp => PlayerMaxHp * GetPassiveMultiplier(PassiveStat.MaxHp);
+    public float PlayerEffectivePickupRadius => PlayerPickupRadius * GetPermanentUpgradeMultiplier(PassiveStat.PickupRadius) * GetPassiveMultiplier(PassiveStat.PickupRadius);
+    public float PlayerEffectiveSpeed => PlayerSpeed * GetPermanentUpgradeMultiplier(PassiveStat.MoveSpeed) * GetPassiveMultiplier(PassiveStat.MoveSpeed);
+    public float PlayerEffectiveMaxHp => PlayerMaxHp * GetPermanentUpgradeMultiplier(PassiveStat.MaxHp) * GetPassiveMultiplier(PassiveStat.MaxHp);
 
     private float GetPassiveMultiplier(PassiveStat stat) {
         var passive = EquippedPassives.Find(p => p.Definition.Stat == stat);
         return passive?.CurrentLevelData.Multiplier ?? 1f;
+    }
+
+    public float GetPermanentUpgradeMultiplier(PassiveStat stat) {
+        string upgradeId = stat switch {
+            PassiveStat.MaxHp => "MaxHp",
+            PassiveStat.Damage => "Damage",
+            PassiveStat.MoveSpeed => "MoveSpeed",
+            PassiveStat.WeaponCooldown => "WeaponCooldown",
+            PassiveStat.PickupRadius => "PickupRadius",
+            _ => ""
+        };
+        if (string.IsNullOrEmpty(upgradeId)) return 1f;
+        int rank = GetPermanentUpgradeRank(upgradeId);
+        if (rank <= 0) return 1f;
+        if (stat == PassiveStat.WeaponCooldown) {
+            return 1f - (rank * 0.10f);
+        } else {
+            return 1f + (rank * 0.10f);
+        }
     }
 
     public int StageNumber { get; set; } = 1;
@@ -70,14 +92,81 @@ public class Simulation {
     public event Action? OnTRexDefeated;
 
     public bool IsPaused { get; private set; } = false;
-    public bool IsAutoFireEnabled { get; set; } = true;
-    public bool ShowFloatingDamageNumbers { get; set; } = true;
+    public bool IsAutoFireEnabled {
+        get => _saveData.IsAutoFireEnabled;
+        set => _saveData.IsAutoFireEnabled = value;
+    }
+    public bool ShowFloatingDamageNumbers {
+        get => _saveData.ShowFloatingDamageNumbers;
+        set => _saveData.ShowFloatingDamageNumbers = value;
+    }
 
     public void TogglePause() {
         IsPaused = !IsPaused;
     }
 
+    public int GetPermanentUpgradeRank(string upgradeId) {
+        if (_saveData.PermanentUpgradeRanks.TryGetValue(upgradeId, out var rank)) {
+            return rank;
+        }
+        return 0;
+    }
+
+    public int GetPermanentUpgradeCost(string upgradeId, int rank) {
+        if (rank < 1 || rank > 3) return -1;
+        return rank switch {
+            1 => 100,
+            2 => 250,
+            3 => 500,
+            _ => -1
+        };
+    }
+
+    public bool BuyPermanentUpgrade(string upgradeId) {
+        int currentRank = GetPermanentUpgradeRank(upgradeId);
+        if (currentRank >= 3) return false;
+
+        int cost = GetPermanentUpgradeCost(upgradeId, currentRank + 1);
+        if (cost < 0 || BankedJurassicCash < cost) return false;
+
+        _saveData.BankedJurassicCash -= cost;
+        _saveData.PermanentUpgradeRanks[upgradeId] = currentRank + 1;
+        SaveSimulationData();
+        return true;
+    }
+
+    public void SaveSimulationData() {
+        _persistence.Save(_saveData);
+    }
+
+    private void UpdateBestRunSummary() {
+        bool changed = false;
+        if (StageNumber > _saveData.BestRun.MaxStageReached) {
+            _saveData.BestRun.MaxStageReached = StageNumber;
+            changed = true;
+        }
+        if (PlayerLevel > _saveData.BestRun.MaxLevelReached) {
+            _saveData.BestRun.MaxLevelReached = PlayerLevel;
+            changed = true;
+        }
+        if (StageTimeElapsed > _saveData.BestRun.MaxTimeSurvived) {
+            _saveData.BestRun.MaxTimeSurvived = StageTimeElapsed;
+            changed = true;
+        }
+        if (_cashCollectedThisRun > _saveData.BestRun.MaxCashCollected) {
+            _saveData.BestRun.MaxCashCollected = _cashCollectedThisRun;
+            changed = true;
+        }
+        if (changed) {
+            SaveSimulationData();
+        }
+    }
+
     public void QuitRun() {
+        if (!IsRunLost) {
+            UpdateBestRunSummary();
+            _wasRunLostLastFrame = true;
+        }
         UnbankedJurassicCash = 0;
         EquippedPassives.Clear();
         EquippedWeapons.Clear();
@@ -88,7 +177,12 @@ public class Simulation {
     }
 
     private readonly IRng _rng;
+    private readonly IPersistence _persistence;
     private readonly IContentProvider _content;
+    private SaveData _saveData;
+    private int _cashCollectedThisRun = 0;
+    private bool _wasRunLostLastFrame = false;
+    private bool _wasRunCompleteLastFrame = false;
     public List<Enemy> Enemies { get; } = new();
     private float _spawnTimer = 0f;
     private const float MinSpawnRadius = 450f;
@@ -96,7 +190,9 @@ public class Simulation {
 
     public Simulation(IRng rng, IPersistence persistence, IContentProvider content) {
         _rng = rng;
+        _persistence = persistence;
         _content = content;
+        _saveData = _persistence.Load() ?? new SaveData();
         PlayerPosition = ArenaSize / 2f;
 
         var startingWeaponDef = _content.GetWeaponDefinition("TranqPistol");
@@ -144,6 +240,43 @@ public class Simulation {
         Enemies.Add(new Enemy(position));
     }
 
+    public string GetUpgradeOptionLabel(UpgradeOption option) {
+        if (option == null) return "";
+        switch (option.Type) {
+            case UpgradeType.NewWeapon: {
+                var def = _content.GetWeaponDefinition(option.ItemId ?? "");
+                var name = (def?.Name ?? option.ItemId ?? "Unknown Weapon").ToUpperInvariant();
+                return $"{name} - NEW";
+            }
+            case UpgradeType.WeaponUpgrade: {
+                var equipped = EquippedWeapons.Find(w => w.Definition.Id == option.ItemId);
+                int currentLevel = equipped?.Level ?? 1;
+                int targetLevel = currentLevel + 1;
+                var def = _content.GetWeaponDefinition(option.ItemId ?? "");
+                var name = (def?.Name ?? option.ItemId ?? "Unknown Weapon").ToUpperInvariant();
+                return $"{name} - LV {currentLevel}->{targetLevel}";
+            }
+            case UpgradeType.NewPassive: {
+                var def = _content.GetPassiveDefinition(option.ItemId ?? "");
+                var name = (def?.Name ?? option.ItemId ?? "Unknown Passive").ToUpperInvariant();
+                return $"{name} - NEW";
+            }
+            case UpgradeType.PassiveUpgrade: {
+                var equipped = EquippedPassives.Find(p => p.Definition.Id == option.ItemId);
+                int currentLevel = equipped?.Level ?? 1;
+                int targetLevel = currentLevel + 1;
+                var def = _content.GetPassiveDefinition(option.ItemId ?? "");
+                var name = (def?.Name ?? option.ItemId ?? "Unknown Passive").ToUpperInvariant();
+                return $"{name} - LV {currentLevel}->{targetLevel}";
+            }
+            case UpgradeType.CashFallback: {
+                return "+25 JURASSIC CASH";
+            }
+            default:
+                return "";
+        }
+    }
+
     public void SelectLevelUpOption(int index) {
         if (!IsPausedForLevelUp || index < 0 || index >= PendingLevelUpOptions.Count) return;
 
@@ -161,6 +294,7 @@ public class Simulation {
                 break;
             case UpgradeType.CashFallback:
                 UnbankedJurassicCash += 25;
+                _cashCollectedThisRun += 25;
                 break;
         }
 
@@ -276,7 +410,7 @@ public class Simulation {
                             aimDir = Vector2.Normalize(aimDir);
                         }
                         var data = weapon.CurrentLevelData;
-                        var effectiveDamage = data.Damage * GetPassiveMultiplier(PassiveStat.Damage);
+                        var effectiveDamage = data.Damage * GetPermanentUpgradeMultiplier(PassiveStat.Damage) * GetPassiveMultiplier(PassiveStat.Damage);
                         Projectiles.Add(new Projectile(
                             PlayerPosition,
                             aimDir,
@@ -286,12 +420,12 @@ public class Simulation {
                             data.PierceCount,
                             data.ExplosionRadius
                         ));
-                        weapon.CooldownTimer = data.Cooldown * GetPassiveMultiplier(PassiveStat.WeaponCooldown);
+                        weapon.CooldownTimer = data.Cooldown * GetPermanentUpgradeMultiplier(PassiveStat.WeaponCooldown) * GetPassiveMultiplier(PassiveStat.WeaponCooldown);
                     }
                 } else {
                     // Autonomous area zapper behavior
                     var data = weapon.CurrentLevelData;
-                    var autonomousDamage = data.Damage * GetPassiveMultiplier(PassiveStat.Damage);
+                    var autonomousDamage = data.Damage * GetPermanentUpgradeMultiplier(PassiveStat.Damage) * GetPassiveMultiplier(PassiveStat.Damage);
                     for (int j = Enemies.Count - 1; j >= 0; j--) {
                         var enemy = Enemies[j];
                         var dist = Vector2.Distance(PlayerPosition, enemy.Position);
@@ -308,7 +442,7 @@ public class Simulation {
                             }
                         }
                     }
-                    weapon.CooldownTimer = data.Cooldown * GetPassiveMultiplier(PassiveStat.WeaponCooldown);
+                    weapon.CooldownTimer = data.Cooldown * GetPermanentUpgradeMultiplier(PassiveStat.WeaponCooldown) * GetPassiveMultiplier(PassiveStat.WeaponCooldown);
                 }
             }
         }
@@ -419,6 +553,7 @@ public class Simulation {
             var drop = JurassicCashDrops[i];
             if (Vector2.Distance(PlayerPosition, drop.Position) <= PlayerEffectivePickupRadius) {
                 UnbankedJurassicCash += drop.CashValue;
+                _cashCollectedThisRun += drop.CashValue;
                 JurassicCashDrops.RemoveAt(i);
             }
         }
@@ -570,6 +705,7 @@ public class Simulation {
     private void EnterSafehouse() {
         BankedJurassicCash += UnbankedJurassicCash;
         UnbankedJurassicCash = 0;
+        SaveSimulationData();
         XpGems.Clear();
         JurassicCashDrops.Clear();
         Enemies.Clear();
@@ -594,6 +730,8 @@ public class Simulation {
                 break;
             case SafehouseRewardType.BankedCashBonus:
                 BankedJurassicCash += (int)option.Amount;
+                _cashCollectedThisRun += (int)option.Amount;
+                SaveSimulationData();
                 break;
             case SafehouseRewardType.BonusXp:
                 PlayerXp += option.Amount;
@@ -709,6 +847,15 @@ public class Simulation {
             BankedJurassicCash += UnbankedJurassicCash;
             UnbankedJurassicCash = 0;
             IsRunComplete = true;
+        }
+
+        if (IsRunLost && !_wasRunLostLastFrame) {
+            _wasRunLostLastFrame = true;
+            UpdateBestRunSummary();
+        }
+        if (IsRunComplete && !_wasRunCompleteLastFrame) {
+            _wasRunCompleteLastFrame = true;
+            UpdateBestRunSummary();
         }
     }
 

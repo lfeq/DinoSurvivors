@@ -1977,6 +1977,310 @@ public class SimulationTests {
         Assert.Equal(enemyPosBefore, sim.Enemies[0].Position);
         Assert.Equal(playerPosBefore, sim.PlayerPosition);
     }
+
+    [Fact]
+    public void GetUpgradeOptionLabel_NewWeapon_ReturnsCorrectLabel() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        var option = new UpgradeOption { Type = UpgradeType.NewWeapon, ItemId = "TranqPistol" };
+
+        var label = sim.GetUpgradeOptionLabel(option);
+
+        Assert.Equal("TRANQ PISTOL - NEW", label);
+    }
+
+    [Fact]
+    public void GetUpgradeOptionLabel_WeaponUpgrade_ReturnsCorrectLabel() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        var option = new UpgradeOption { Type = UpgradeType.WeaponUpgrade, ItemId = "TranqPistol" };
+
+        var label = sim.GetUpgradeOptionLabel(option);
+
+        Assert.Equal("TRANQ PISTOL - LV 1->2", label);
+    }
+
+    [Fact]
+    public void GetUpgradeOptionLabel_PassivesAndFallback_ReturnsCorrectLabels() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        
+        // Test NewPassive
+        var newPassiveOpt = new UpgradeOption { Type = UpgradeType.NewPassive, ItemId = "RunningShoes" };
+        Assert.Equal("RUNNING SHOES - NEW", sim.GetUpgradeOptionLabel(newPassiveOpt));
+
+        // Test PassiveUpgrade
+        // Equip RunningShoes first
+        sim.TryAddOrUpgradePassive("RunningShoes");
+        var upgradePassiveOpt = new UpgradeOption { Type = UpgradeType.PassiveUpgrade, ItemId = "RunningShoes" };
+        Assert.Equal("RUNNING SHOES - LV 1->2", sim.GetUpgradeOptionLabel(upgradePassiveOpt));
+
+        // Test CashFallback
+        var fallbackOpt = new UpgradeOption { Type = UpgradeType.CashFallback };
+        Assert.Equal("+25 JURASSIC CASH", sim.GetUpgradeOptionLabel(fallbackOpt));
+    }
+
+    // --- Issue #15: Save Data + Souvenir Shop + Permanent Upgrades ---
+
+    [Fact]
+    public void SaveDataRoundTripsCorrectly() {
+        var persistence = new StubPersistence();
+        var data = new SaveData {
+            BankedJurassicCash = 350,
+            IsAutoFireEnabled = false,
+            ShowFloatingDamageNumbers = false,
+            PermanentUpgradeRanks = new System.Collections.Generic.Dictionary<string, int> {
+                { "MaxHp", 2 },
+                { "Damage", 1 }
+            },
+            BestRun = new BestRunSummary {
+                MaxStageReached = 3,
+                MaxLevelReached = 12,
+                MaxTimeSurvived = 605.5f,
+                MaxCashCollected = 240
+            }
+        };
+
+        persistence.Save(data);
+        var loaded = persistence.Load();
+
+        Assert.NotNull(loaded);
+        Assert.Equal(350, loaded.BankedJurassicCash);
+        Assert.False(loaded.IsAutoFireEnabled);
+        Assert.False(loaded.ShowFloatingDamageNumbers);
+        Assert.Equal(2, loaded.PermanentUpgradeRanks["MaxHp"]);
+        Assert.Equal(1, loaded.PermanentUpgradeRanks["Damage"]);
+        Assert.Equal(3, loaded.BestRun.MaxStageReached);
+        Assert.Equal(12, loaded.BestRun.MaxLevelReached);
+        Assert.Equal(605.5f, loaded.BestRun.MaxTimeSurvived);
+        Assert.Equal(240, loaded.BestRun.MaxCashCollected);
+    }
+
+    [Fact]
+    public void SimulationLoadsSaveDataOnStartup() {
+        var rng = new StubRng();
+        var persistence = new StubPersistence();
+        var data = new SaveData {
+            BankedJurassicCash = 420,
+            IsAutoFireEnabled = false,
+            ShowFloatingDamageNumbers = false,
+            PermanentUpgradeRanks = new System.Collections.Generic.Dictionary<string, int> {
+                { "MaxHp", 2 }
+            }
+        };
+        persistence.Save(data);
+
+        var sim = new Simulation(rng, persistence, new StubContentProvider());
+
+        Assert.Equal(420, sim.BankedJurassicCash);
+        Assert.False(sim.IsAutoFireEnabled);
+        Assert.False(sim.ShowFloatingDamageNumbers);
+        Assert.Equal(2, sim.GetPermanentUpgradeRank("MaxHp"));
+        Assert.Equal(0, sim.GetPermanentUpgradeRank("Damage"));
+    }
+
+    [Fact]
+    public void SouvenirShopPurchaseDeductsCashAndEscalatesCost() {
+        var rng = new StubRng();
+        var persistence = new StubPersistence();
+        var data = new SaveData {
+            BankedJurassicCash = 1000
+        };
+        persistence.Save(data);
+
+        var sim = new Simulation(rng, persistence, new StubContentProvider());
+
+        Assert.Equal(0, sim.GetPermanentUpgradeRank("MaxHp"));
+        Assert.Equal(100, sim.GetPermanentUpgradeCost("MaxHp", 1));
+
+        // Buy Rank 1
+        bool success1 = sim.BuyPermanentUpgrade("MaxHp");
+        Assert.True(success1);
+        Assert.Equal(1, sim.GetPermanentUpgradeRank("MaxHp"));
+        Assert.Equal(900, sim.BankedJurassicCash);
+        Assert.Equal(250, sim.GetPermanentUpgradeCost("MaxHp", 2));
+
+        // Buy Rank 2
+        bool success2 = sim.BuyPermanentUpgrade("MaxHp");
+        Assert.True(success2);
+        Assert.Equal(2, sim.GetPermanentUpgradeRank("MaxHp"));
+        Assert.Equal(650, sim.BankedJurassicCash);
+        Assert.Equal(500, sim.GetPermanentUpgradeCost("MaxHp", 3));
+
+        // Buy Rank 3
+        bool success3 = sim.BuyPermanentUpgrade("MaxHp");
+        Assert.True(success3);
+        Assert.Equal(3, sim.GetPermanentUpgradeRank("MaxHp"));
+        Assert.Equal(150, sim.BankedJurassicCash);
+        Assert.Equal(-1, sim.GetPermanentUpgradeCost("MaxHp", 4));
+
+        // Try to buy Rank 4 (should fail because rank cap is 3)
+        bool success4 = sim.BuyPermanentUpgrade("MaxHp");
+        Assert.False(success4);
+        Assert.Equal(3, sim.GetPermanentUpgradeRank("MaxHp"));
+        Assert.Equal(150, sim.BankedJurassicCash);
+
+        // Try to buy a different upgrade with insufficient cash (cost 100, we have 150)
+        // Let's buy "Damage" rank 1
+        bool successDamage1 = sim.BuyPermanentUpgrade("Damage");
+        Assert.True(successDamage1);
+        Assert.Equal(1, sim.GetPermanentUpgradeRank("Damage"));
+        Assert.Equal(50, sim.BankedJurassicCash);
+
+        // Try to buy "Damage" rank 2 with insufficient cash (cost 250, we have 50)
+        bool successDamage2 = sim.BuyPermanentUpgrade("Damage");
+        Assert.False(successDamage2);
+        Assert.Equal(1, sim.GetPermanentUpgradeRank("Damage"));
+        Assert.Equal(50, sim.BankedJurassicCash);
+    }
+
+    [Fact]
+    public void PermanentUpgradesRaisePlayerBaselineStats() {
+        var rng = new StubRng();
+        var persistence = new StubPersistence();
+        var data = new SaveData {
+            BankedJurassicCash = 1000
+        };
+        persistence.Save(data);
+
+        var sim = new Simulation(rng, persistence, new StubContentProvider());
+
+        // Buy rank 1 of each upgrade
+        Assert.True(sim.BuyPermanentUpgrade("MaxHp"));
+        Assert.True(sim.BuyPermanentUpgrade("MoveSpeed"));
+        Assert.True(sim.BuyPermanentUpgrade("PickupRadius"));
+        Assert.True(sim.BuyPermanentUpgrade("Damage"));
+        Assert.True(sim.BuyPermanentUpgrade("WeaponCooldown"));
+
+        // Verify effective stats:
+        // Max HP: base 100 * 1.10 = 110
+        Assert.Equal(110f, sim.PlayerEffectiveMaxHp);
+        // Move Speed: base 200 * 1.10 = 220
+        Assert.Equal(220f, sim.PlayerEffectiveSpeed);
+        // Pickup Radius: base 45 * 1.10 = 49.5
+        Assert.Equal(49.5f, sim.PlayerEffectivePickupRadius);
+
+        // Verify compounding with passive items:
+        // Add running shoes (Multiplier = 1.15)
+        sim.TryAddOrUpgradePassive("RunningShoes");
+        // Speed: base 200 * permanent 1.10 * passive 1.15 = 253
+        Assert.Equal(253f, sim.PlayerEffectiveSpeed);
+    }
+
+    [Fact]
+    public void PermanentUpgradesModifyProjectileDamageAndWeaponCooldown() {
+        var rng = new StubRng();
+        var persistence = new StubPersistence();
+        var data = new SaveData {
+            BankedJurassicCash = 1000
+        };
+        persistence.Save(data);
+
+        var sim = new Simulation(rng, persistence, new StubContentProvider());
+
+        // Buy Damage and Weapon Cooldown
+        Assert.True(sim.BuyPermanentUpgrade("Damage"));
+        Assert.True(sim.BuyPermanentUpgrade("WeaponCooldown"));
+
+        // Step once to fire a projectile
+        sim.Step(new ControlActions(Vector2.Zero, new Vector2(1, 0)), 0f);
+
+        // Projectile damage: 10 base * 1.10 = 11
+        Assert.Single(sim.Projectiles);
+        Assert.Equal(11f, sim.Projectiles[0].Damage);
+
+        // Weapon cooldown: 0.8s base * 0.90 = 0.72
+        Assert.Equal(0.72f, sim.EquippedWeapons[0].CooldownTimer, 3);
+    }
+
+    [Fact]
+    public void BestRunSummaryUpdatesOnRunEnd() {
+        var rng = new StubRng();
+        var persistence = new StubPersistence();
+        var data = new SaveData {
+            BankedJurassicCash = 100
+        };
+        persistence.Save(data);
+
+        var sim = new Simulation(rng, persistence, new StubContentProvider());
+
+        // Simulate a run where we collect some cash, level up, survive time, and advance stage
+        sim.StageNumber = 2;
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 150f); // survive 150s
+
+        // Add 10 XP gems at player position to trigger level up
+        for (int i = 0; i < 10; i++) {
+            sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
+        }
+        // Step once to collect them
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+        Assert.True(sim.IsPausedForLevelUp);
+        sim.SelectLevelUpOption(0); // Level-up completed to Level 2
+
+        // Add 2 cash drops at player position
+        sim.JurassicCashDrops.Add(new JurassicCashDrop(sim.PlayerPosition, 10));
+        sim.JurassicCashDrops.Add(new JurassicCashDrop(sim.PlayerPosition, 15));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f); // collect cash
+
+        // Now quit the run
+        sim.QuitRun();
+
+        // Check that best run summary in persistence was updated
+        var loaded = persistence.Load();
+        Assert.Equal(2, loaded.BestRun.MaxStageReached);
+        Assert.Equal(2, loaded.BestRun.MaxLevelReached);
+        Assert.Equal(150.2f, loaded.BestRun.MaxTimeSurvived, 1);
+        Assert.Equal(25, loaded.BestRun.MaxCashCollected);
+
+        // Run again with lesser stats and check that it doesn't overwrite with lesser values
+        var sim2 = new Simulation(rng, persistence, new StubContentProvider());
+        sim2.StageNumber = 1;
+        sim2.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 50f);
+        sim2.QuitRun();
+
+        var loaded2 = persistence.Load();
+        Assert.Equal(2, loaded2.BestRun.MaxStageReached);
+        Assert.Equal(2, loaded2.BestRun.MaxLevelReached);
+        Assert.Equal(150.2f, loaded2.BestRun.MaxTimeSurvived, 1);
+        Assert.Equal(25, loaded2.BestRun.MaxCashCollected);
+    }
+
+    [Fact]
+    public void FilePersistenceRoundTripsThroughDisk() {
+        string tempPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), System.Guid.NewGuid().ToString() + "_save.json");
+        try {
+            var persistence = new FilePersistence(tempPath);
+
+            // Load empty
+            var loadedEmpty = persistence.Load();
+            Assert.NotNull(loadedEmpty);
+            Assert.Equal(0, loadedEmpty.BankedJurassicCash);
+
+            // Save some data
+            var data = new SaveData {
+                BankedJurassicCash = 150,
+                IsAutoFireEnabled = false,
+                ShowFloatingDamageNumbers = true,
+                PermanentUpgradeRanks = new System.Collections.Generic.Dictionary<string, int> {
+                    { "MoveSpeed", 1 }
+                },
+                BestRun = new BestRunSummary {
+                    MaxStageReached = 2
+                }
+            };
+            persistence.Save(data);
+
+            // Read it back
+            var loaded = persistence.Load();
+            Assert.NotNull(loaded);
+            Assert.Equal(150, loaded.BankedJurassicCash);
+            Assert.False(loaded.IsAutoFireEnabled);
+            Assert.True(loaded.ShowFloatingDamageNumbers);
+            Assert.Equal(1, loaded.PermanentUpgradeRanks["MoveSpeed"]);
+            Assert.Equal(2, loaded.BestRun.MaxStageReached);
+        } finally {
+            if (System.IO.File.Exists(tempPath)) {
+                System.IO.File.Delete(tempPath);
+            }
+        }
+    }
 }
 
 
