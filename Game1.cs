@@ -14,10 +14,12 @@ public class Game1 : Game {
     private Texture2D _pixelTexture;
     private Vector2 _cameraPosition;
     private float _playerDamageFlashTimer = 0f;
-    private bool _enableDamageNumbers = true;
     private KeyboardState _previousKeyboardState;
     private MouseState _previousMouseState;
     private int _selectedLevelUpIndex = 0;
+    private bool _isInSettingsMenu = false;
+    private int _selectedPauseMenuIndex = 0;
+    private int _selectedSettingsIndex = 0;
 
     private class FloatingDamageNumber {
         public Vector2 Position;
@@ -63,7 +65,7 @@ public class Game1 : Game {
         };
 
         _simulation.OnEnemyHit += (position, damage) => {
-            if (_enableDamageNumbers) {
+            if (_simulation.ShowFloatingDamageNumbers) {
                 _floatingDamageNumbers.Add(new FloatingDamageNumber(position, damage));
             }
             PlayHitSound();
@@ -161,6 +163,148 @@ public class Game1 : Game {
             return;
         }
 
+        if (_simulation.IsPaused) {
+            // Toggle pause if P is pressed (edge-triggered)
+            if (keyboardState.IsKeyDown(Keys.P) && !_previousKeyboardState.IsKeyDown(Keys.P)) {
+                _simulation.TogglePause();
+                _isInSettingsMenu = false;
+                _selectedPauseMenuIndex = 0;
+                _selectedSettingsIndex = 0;
+                _previousKeyboardState = keyboardState;
+                _previousMouseState = mouseState;
+                base.Update(gameTime);
+                return;
+            }
+
+            int modalWidth = 450;
+            int modalHeight = 280;
+            int modalX = (GraphicsDevice.Viewport.Width - modalWidth) / 2;
+            int modalY = (GraphicsDevice.Viewport.Height - modalHeight) / 2;
+            int optionWidth = 410;
+            int optionHeight = 48;
+            int optionX = modalX + 20;
+            int optionYStart = modalY + 70;
+            int optionSpacing = 56;
+
+            if (_isInSettingsMenu) {
+                // Settings sub-menu navigation
+                if ((keyboardState.IsKeyDown(Keys.Up) && !_previousKeyboardState.IsKeyDown(Keys.Up)) ||
+                    (keyboardState.IsKeyDown(Keys.W) && !_previousKeyboardState.IsKeyDown(Keys.W))) {
+                    _selectedSettingsIndex = (_selectedSettingsIndex - 1 + 3) % 3;
+                }
+                if ((keyboardState.IsKeyDown(Keys.Down) && !_previousKeyboardState.IsKeyDown(Keys.Down)) ||
+                    (keyboardState.IsKeyDown(Keys.S) && !_previousKeyboardState.IsKeyDown(Keys.S))) {
+                    _selectedSettingsIndex = (_selectedSettingsIndex + 1) % 3;
+                }
+
+                // Mouse hover selection
+                for (int i = 0; i < 3; i++) {
+                    var rect = new Rectangle(optionX, optionYStart + i * optionSpacing, optionWidth, optionHeight);
+                    if (rect.Contains(mouseState.X, mouseState.Y)) {
+                        _selectedSettingsIndex = i;
+                    }
+                }
+
+                // Selection trigger
+                int selectionIndex = -1;
+                if ((keyboardState.IsKeyDown(Keys.D1) && !_previousKeyboardState.IsKeyDown(Keys.D1)) ||
+                    (keyboardState.IsKeyDown(Keys.NumPad1) && !_previousKeyboardState.IsKeyDown(Keys.NumPad1))) {
+                    selectionIndex = 0;
+                }
+                else if ((keyboardState.IsKeyDown(Keys.D2) && !_previousKeyboardState.IsKeyDown(Keys.D2)) ||
+                         (keyboardState.IsKeyDown(Keys.NumPad2) && !_previousKeyboardState.IsKeyDown(Keys.NumPad2))) {
+                    selectionIndex = 1;
+                }
+                else if ((keyboardState.IsKeyDown(Keys.D3) && !_previousKeyboardState.IsKeyDown(Keys.D3)) ||
+                         (keyboardState.IsKeyDown(Keys.NumPad3) && !_previousKeyboardState.IsKeyDown(Keys.NumPad3))) {
+                    selectionIndex = 2;
+                }
+                else if (keyboardState.IsKeyDown(Keys.Enter) && !_previousKeyboardState.IsKeyDown(Keys.Enter)) {
+                    selectionIndex = _selectedSettingsIndex;
+                }
+                else if (mouseState.LeftButton == ButtonState.Pressed && _previousMouseState.LeftButton == ButtonState.Released) {
+                    for (int i = 0; i < 3; i++) {
+                        var rect = new Rectangle(optionX, optionYStart + i * optionSpacing, optionWidth, optionHeight);
+                        if (rect.Contains(mouseState.X, mouseState.Y)) {
+                            selectionIndex = i;
+                            break;
+                        }
+                    }
+                }
+
+                if (selectionIndex == 0) {
+                    _simulation.IsAutoFireEnabled = !_simulation.IsAutoFireEnabled;
+                    _simulation.SaveSimulationData();
+                } else if (selectionIndex == 1) {
+                    _simulation.ShowFloatingDamageNumbers = !_simulation.ShowFloatingDamageNumbers;
+                    _simulation.SaveSimulationData();
+                } else if (selectionIndex == 2) {
+                    _isInSettingsMenu = false;
+                    _selectedSettingsIndex = 0;
+                }
+            } else {
+                // Main Pause Menu navigation
+                if ((keyboardState.IsKeyDown(Keys.Up) && !_previousKeyboardState.IsKeyDown(Keys.Up)) ||
+                    (keyboardState.IsKeyDown(Keys.W) && !_previousKeyboardState.IsKeyDown(Keys.W))) {
+                    _selectedPauseMenuIndex = (_selectedPauseMenuIndex - 1 + 3) % 3;
+                }
+                if ((keyboardState.IsKeyDown(Keys.Down) && !_previousKeyboardState.IsKeyDown(Keys.Down)) ||
+                    (keyboardState.IsKeyDown(Keys.S) && !_previousKeyboardState.IsKeyDown(Keys.S))) {
+                    _selectedPauseMenuIndex = (_selectedPauseMenuIndex + 1) % 3;
+                }
+
+                // Mouse hover selection
+                for (int i = 0; i < 3; i++) {
+                    var rect = new Rectangle(optionX, optionYStart + i * optionSpacing, optionWidth, optionHeight);
+                    if (rect.Contains(mouseState.X, mouseState.Y)) {
+                        _selectedPauseMenuIndex = i;
+                    }
+                }
+
+                // Selection trigger
+                int selectionIndex = -1;
+                if ((keyboardState.IsKeyDown(Keys.D1) && !_previousKeyboardState.IsKeyDown(Keys.D1)) ||
+                    (keyboardState.IsKeyDown(Keys.NumPad1) && !_previousKeyboardState.IsKeyDown(Keys.NumPad1))) {
+                    selectionIndex = 0;
+                }
+                else if ((keyboardState.IsKeyDown(Keys.D2) && !_previousKeyboardState.IsKeyDown(Keys.D2)) ||
+                         (keyboardState.IsKeyDown(Keys.NumPad2) && !_previousKeyboardState.IsKeyDown(Keys.NumPad2))) {
+                    selectionIndex = 1;
+                }
+                else if ((keyboardState.IsKeyDown(Keys.D3) && !_previousKeyboardState.IsKeyDown(Keys.D3)) ||
+                         (keyboardState.IsKeyDown(Keys.NumPad3) && !_previousKeyboardState.IsKeyDown(Keys.NumPad3))) {
+                    selectionIndex = 2;
+                }
+                else if (keyboardState.IsKeyDown(Keys.Enter) && !_previousKeyboardState.IsKeyDown(Keys.Enter)) {
+                    selectionIndex = _selectedPauseMenuIndex;
+                }
+                else if (mouseState.LeftButton == ButtonState.Pressed && _previousMouseState.LeftButton == ButtonState.Released) {
+                    for (int i = 0; i < 3; i++) {
+                        var rect = new Rectangle(optionX, optionYStart + i * optionSpacing, optionWidth, optionHeight);
+                        if (rect.Contains(mouseState.X, mouseState.Y)) {
+                            selectionIndex = i;
+                            break;
+                        }
+                    }
+                }
+
+                if (selectionIndex == 0) {
+                    _simulation.TogglePause();
+                } else if (selectionIndex == 1) {
+                    _isInSettingsMenu = true;
+                    _selectedSettingsIndex = 0;
+                } else if (selectionIndex == 2) {
+                    _simulation.QuitRun();
+                    _simulation.TogglePause();
+                }
+            }
+
+            _previousKeyboardState = keyboardState;
+            _previousMouseState = mouseState;
+            base.Update(gameTime);
+            return;
+        }
+
         // Map WASD keys to MoveDirection
         var moveDir = Vector2.Zero;
         if (keyboardState.IsKeyDown(Keys.W)) moveDir.Y -= 1;
@@ -183,9 +327,9 @@ public class Game1 : Game {
         var simAimDir = new System.Numerics.Vector2(aimDir.X, aimDir.Y);
 
         var fire = mouseState.LeftButton == ButtonState.Pressed;
-        var pause = keyboardState.IsKeyDown(Keys.P);
-        var confirm = keyboardState.IsKeyDown(Keys.Enter);
-        var cancel = keyboardState.IsKeyDown(Keys.Back);
+        var pause = keyboardState.IsKeyDown(Keys.P) && !_previousKeyboardState.IsKeyDown(Keys.P);
+        var confirm = keyboardState.IsKeyDown(Keys.Enter) && !_previousKeyboardState.IsKeyDown(Keys.Enter);
+        var cancel = keyboardState.IsKeyDown(Keys.Back) && !_previousKeyboardState.IsKeyDown(Keys.Back);
 
         var actions = new ControlActions(simMoveDir, simAimDir, fire, pause, confirm, cancel);
 
@@ -540,6 +684,153 @@ public class Game1 : Game {
                 
                 // Draw option label
                 DrawPixelString(label, optionX + 44, optY + 16, 2, textColor);
+            }
+        }
+
+        // If paused, show Pause Menu / Settings overlay
+        if (_simulation.IsPaused) {
+            // Dark dim overlay
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(0, 0, GraphicsDevice.Viewport.Width, GraphicsDevice.Viewport.Height), new Color(0, 0, 0, 180));
+            
+            // Draw a center modal
+            int modalWidth = 450;
+            int modalHeight = 280;
+            int modalX = (GraphicsDevice.Viewport.Width - modalWidth) / 2;
+            int modalY = (GraphicsDevice.Viewport.Height - modalHeight) / 2;
+            
+            // Draw container background
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(modalX, modalY, modalWidth, modalHeight), new Color(15, 15, 20, 240));
+            // Draw border
+            _spriteBatch.Draw(_pixelTexture, new Rectangle(modalX - 2, modalY - 2, modalWidth + 4, modalHeight + 4), Color.Cyan * 0.7f);
+            
+            if (_isInSettingsMenu) {
+                // Center title: "SETTINGS"
+                string title = "SETTINGS";
+                int titlePixelSize = 3;
+                int titleWidth = title.Length * 4 * titlePixelSize - titlePixelSize;
+                int titleX = modalX + (modalWidth - titleWidth) / 2;
+                DrawPixelString(title, titleX, modalY + 16, titlePixelSize, Color.Cyan);
+                
+                // Subtitle: "ADJUST GAME OPTIONS"
+                string subtitle = "ADJUST GAME OPTIONS";
+                int subtitlePixelSize = 1;
+                int subtitleWidth = subtitle.Length * 4 * subtitlePixelSize - subtitlePixelSize;
+                int subtitleX = modalX + (modalWidth - subtitleWidth) / 2;
+                DrawPixelString(subtitle, subtitleX, modalY + 44, subtitlePixelSize, Color.White * 0.7f);
+                
+                // Draw three settings options
+                int optionWidth = 410;
+                int optionHeight = 48;
+                int optionX = modalX + 20;
+                int optionYStart = modalY + 70;
+                int optionSpacing = 56;
+                
+                for (int i = 0; i < 3; i++) {
+                    string label = "";
+                    Color itemColor = Color.White;
+                    if (i == 0) {
+                        label = _simulation.IsAutoFireEnabled ? "FIRE MODE - AUTO" : "FIRE MODE - MANUAL";
+                        itemColor = _simulation.IsAutoFireEnabled ? Color.LimeGreen : Color.Orange;
+                    } else if (i == 1) {
+                        label = _simulation.ShowFloatingDamageNumbers ? "DAMAGE NUMBERS - ON" : "DAMAGE NUMBERS - OFF";
+                        itemColor = _simulation.ShowFloatingDamageNumbers ? Color.LimeGreen : Color.Orange;
+                    } else if (i == 2) {
+                        label = "BACK";
+                        itemColor = Color.Gray;
+                    }
+                    
+                    int optY = optionYStart + i * optionSpacing;
+                    var rect = new Rectangle(optionX, optY, optionWidth, optionHeight);
+                    bool isSelected = (_selectedSettingsIndex == i);
+                    
+                    // Color configuration
+                    Color containerColor = isSelected ? new Color(30, 45, 60, 255) : new Color(20, 20, 25, 200);
+                    Color borderColor = isSelected ? Color.Cyan : Color.DarkSlateGray;
+                    Color textColor = isSelected ? Color.White : Color.LightGray;
+                    
+                    // Draw option box
+                    _spriteBatch.Draw(_pixelTexture, rect, containerColor);
+                    // Draw outline border
+                    int thickness = 2;
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.X, rect.Y, rect.Width, thickness), borderColor);
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.X, rect.Bottom - thickness, rect.Width, thickness), borderColor);
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.X, rect.Y, thickness, rect.Height), borderColor);
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.Right - thickness, rect.Y, thickness, rect.Height), borderColor);
+                    
+                    // Draw item color indicator bar
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.X + 2, rect.Y + 2, 6, rect.Height - 4), itemColor);
+                    
+                    // Draw index number
+                    string indexStr = $"{i + 1}. ";
+                    DrawPixelString(indexStr, optionX + 16, optY + 16, 2, isSelected ? Color.Cyan : Color.Gray);
+                    
+                    // Draw option label
+                    DrawPixelString(label, optionX + 44, optY + 16, 2, textColor);
+                }
+            } else {
+                // Center title: "PAUSED"
+                string title = "PAUSED";
+                int titlePixelSize = 3;
+                int titleWidth = title.Length * 4 * titlePixelSize - titlePixelSize;
+                int titleX = modalX + (modalWidth - titleWidth) / 2;
+                DrawPixelString(title, titleX, modalY + 16, titlePixelSize, Color.Cyan);
+                
+                // Subtitle: "GAME SIMULATION SUSPENDED"
+                string subtitle = "GAME SIMULATION SUSPENDED";
+                int subtitlePixelSize = 1;
+                int subtitleWidth = subtitle.Length * 4 * subtitlePixelSize - subtitlePixelSize;
+                int subtitleX = modalX + (modalWidth - subtitleWidth) / 2;
+                DrawPixelString(subtitle, subtitleX, modalY + 44, subtitlePixelSize, Color.White * 0.7f);
+                
+                // Draw three options
+                int optionWidth = 410;
+                int optionHeight = 48;
+                int optionX = modalX + 20;
+                int optionYStart = modalY + 70;
+                int optionSpacing = 56;
+                
+                for (int i = 0; i < 3; i++) {
+                    string label = "";
+                    Color itemColor = Color.White;
+                    if (i == 0) {
+                        label = "RESUME";
+                        itemColor = Color.LimeGreen;
+                    } else if (i == 1) {
+                        label = "SETTINGS";
+                        itemColor = Color.Cyan;
+                    } else if (i == 2) {
+                        label = "QUIT RUN";
+                        itemColor = Color.Crimson;
+                    }
+                    
+                    int optY = optionYStart + i * optionSpacing;
+                    var rect = new Rectangle(optionX, optY, optionWidth, optionHeight);
+                    bool isSelected = (_selectedPauseMenuIndex == i);
+                    
+                    // Color configuration
+                    Color containerColor = isSelected ? new Color(30, 45, 60, 255) : new Color(20, 20, 25, 200);
+                    Color borderColor = isSelected ? Color.Cyan : Color.DarkSlateGray;
+                    Color textColor = isSelected ? Color.White : Color.LightGray;
+                    
+                    // Draw option box
+                    _spriteBatch.Draw(_pixelTexture, rect, containerColor);
+                    // Draw outline border
+                    int thickness = 2;
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.X, rect.Y, rect.Width, thickness), borderColor);
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.X, rect.Bottom - thickness, rect.Width, thickness), borderColor);
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.X, rect.Y, thickness, rect.Height), borderColor);
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.Right - thickness, rect.Y, thickness, rect.Height), borderColor);
+                    
+                    // Draw item color indicator bar
+                    _spriteBatch.Draw(_pixelTexture, new Rectangle(rect.X + 2, rect.Y + 2, 6, rect.Height - 4), itemColor);
+                    
+                    // Draw index number
+                    string indexStr = $"{i + 1}. ";
+                    DrawPixelString(indexStr, optionX + 16, optY + 16, 2, isSelected ? Color.Cyan : Color.Gray);
+                    
+                    // Draw option label
+                    DrawPixelString(label, optionX + 44, optY + 16, 2, textColor);
+                }
             }
         }
 

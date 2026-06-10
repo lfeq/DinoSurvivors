@@ -275,3 +275,38 @@ public class TRex {
     }
 }
 
+public enum FieldPickupType {
+    DoubleDamage,
+    SpeedBoost,
+    Magnet
+}
+
+public class FieldPickup {
+    public Vector2 Position { get; }
+    public FieldPickupType Type { get; }
+    public float Lifetime { get; set; }
+    public float Duration { get; }
+    public float Multiplier { get; }
+
+    public FieldPickup(Vector2 position, FieldPickupType type, float lifetime = 15f, float duration = 10f, float multiplier = 2f) {
+        Position = position;
+        Type = type;
+        Lifetime = lifetime;
+        Duration = duration;
+        Multiplier = multiplier;
+    }
+}
+
+public class ActiveFieldEffect {
+    public FieldPickupType Type { get; }
+    public float Duration { get; set; }
+    public float Multiplier { get; }
+
+    public ActiveFieldEffect(FieldPickupType type, float duration, float multiplier) {
+        Type = type;
+        Duration = duration;
+        Multiplier = multiplier;
+    }
+}
+
+

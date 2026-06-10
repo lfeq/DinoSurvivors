@@ -1979,6 +1979,32 @@ public class SimulationTests {
     }
 
     [Fact]
+    public void PauseControlActionTogglesSimulationPause() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        Assert.False(sim.IsPaused);
+
+        // Pause control action should pause simulation
+        sim.Step(new ControlActions(System.Numerics.Vector2.Zero, System.Numerics.Vector2.Zero, Pause: true), 1f);
+        Assert.True(sim.IsPaused);
+
+        // While paused, normal updates do not advance time or state
+        sim.SpawnEnemyAt(new System.Numerics.Vector2(1200, 1000));
+        var enemyPosBefore = sim.Enemies[0].Position;
+        var playerPosBefore = sim.PlayerPosition;
+        sim.Step(new ControlActions(new System.Numerics.Vector2(1, 0), System.Numerics.Vector2.Zero), 1f);
+        Assert.Equal(enemyPosBefore, sim.Enemies[0].Position);
+        Assert.Equal(playerPosBefore, sim.PlayerPosition);
+
+        // Pause control action again should unpause simulation
+        sim.Step(new ControlActions(System.Numerics.Vector2.Zero, System.Numerics.Vector2.Zero, Pause: true), 1f);
+        Assert.False(sim.IsPaused);
+
+        // Normal updates should now advance state
+        sim.Step(new ControlActions(new System.Numerics.Vector2(1, 0), System.Numerics.Vector2.Zero), 1f);
+        Assert.NotEqual(playerPosBefore, sim.PlayerPosition);
+    }
+
+    [Fact]
     public void GetUpgradeOptionLabel_NewWeapon_ReturnsCorrectLabel() {
         var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
         var option = new UpgradeOption { Type = UpgradeType.NewWeapon, ItemId = "TranqPistol" };
@@ -2280,6 +2306,138 @@ public class SimulationTests {
                 System.IO.File.Delete(tempPath);
             }
         }
+    }
+
+    // --- Issue #12: Field Pickups ---
+
+    [Fact]
+    public void FieldPickup_SpawnsAndExpires() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        var pickup = new FieldPickup(new Vector2(100f, 100f), FieldPickupType.DoubleDamage, lifetime: 10f);
+        
+        sim.SpawnFieldPickup(pickup);
+        Assert.Single(sim.FieldPickups);
+        Assert.Equal(pickup, sim.FieldPickups[0]);
+
+        // Step simulation by 5s. Pickup shouldn't expire yet.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 5f);
+        Assert.Single(sim.FieldPickups);
+        Assert.Equal(5f, sim.FieldPickups[0].Lifetime);
+
+        // Step simulation past lifetime. Pickup should expire.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 5.1f);
+        Assert.Empty(sim.FieldPickups);
+    }
+
+    [Fact]
+    public void FieldPickup_CollectedWhenInRange() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        // Player is at (1000, 1000) by default. Place pickup at (1020, 1000) (within default effective radius 45).
+        var pickup = new FieldPickup(new Vector2(1020f, 1000f), FieldPickupType.DoubleDamage, lifetime: 10f, duration: 30f, multiplier: 2f);
+        sim.SpawnFieldPickup(pickup);
+
+        bool eventFired = false;
+        FieldPickup? collectedPickup = null;
+        sim.OnFieldPickupCollected += (p) => {
+            eventFired = true;
+            collectedPickup = p;
+        };
+
+        // Step simulation. Player is in range, so pickup should be collected.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.Empty(sim.FieldPickups);
+        Assert.True(eventFired);
+        Assert.Equal(pickup, collectedPickup);
+        Assert.Single(sim.ActiveFieldEffects);
+        Assert.Equal(FieldPickupType.DoubleDamage, sim.ActiveFieldEffects[0].Type);
+        Assert.Equal(29.9f, sim.ActiveFieldEffects[0].Duration, 3);
+        Assert.Equal(2f, sim.ActiveFieldEffects[0].Multiplier);
+    }
+
+    [Fact]
+    public void FieldPickup_EffectsModifyStats() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        
+        float baseSpeed = sim.PlayerEffectiveSpeed;
+        float baseRadius = sim.PlayerEffectivePickupRadius;
+
+        // Apply Speed Boost (1.5x) and Magnet (2.0x)
+        sim.ActiveFieldEffects.Add(new ActiveFieldEffect(FieldPickupType.SpeedBoost, 10f, 1.5f));
+        sim.ActiveFieldEffects.Add(new ActiveFieldEffect(FieldPickupType.Magnet, 10f, 2.0f));
+
+        Assert.Equal(baseSpeed * 1.5f, sim.PlayerEffectiveSpeed);
+        Assert.Equal(baseRadius * 2.0f, sim.PlayerEffectivePickupRadius);
+
+        // Apply Double Damage (2.0x) and check projectile damage.
+        sim.ActiveFieldEffects.Add(new ActiveFieldEffect(FieldPickupType.DoubleDamage, 30f, 2.0f));
+        
+        // Step to fire projectile. Base damage is 10. With Double Damage, it should be 20.
+        sim.Step(new ControlActions(Vector2.Zero, new Vector2(1, 0)), 0f);
+        Assert.Single(sim.Projectiles);
+        Assert.Equal(20f, sim.Projectiles[0].Damage);
+
+        // Test stacking of the same type: another 1.5x Speed Boost.
+        sim.ActiveFieldEffects.Add(new ActiveFieldEffect(FieldPickupType.SpeedBoost, 10f, 1.5f));
+        // Speed multiplier should now be 1.5 * 1.5 = 2.25
+        Assert.Equal(baseSpeed * 2.25f, sim.PlayerEffectiveSpeed);
+    }
+
+    [Fact]
+    public void FieldPickup_ActiveEffectsExpire() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        float baseSpeed = sim.PlayerEffectiveSpeed;
+
+        sim.ActiveFieldEffects.Add(new ActiveFieldEffect(FieldPickupType.SpeedBoost, duration: 5f, multiplier: 1.5f));
+        Assert.Equal(baseSpeed * 1.5f, sim.PlayerEffectiveSpeed);
+
+        // Step by 3s. Buff should still be active.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 3f);
+        Assert.Single(sim.ActiveFieldEffects);
+        Assert.Equal(2f, sim.ActiveFieldEffects[0].Duration);
+        Assert.Equal(baseSpeed * 1.5f, sim.PlayerEffectiveSpeed);
+
+        // Step past duration (3s more). Buff should expire.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 3.1f);
+        Assert.Empty(sim.ActiveFieldEffects);
+        Assert.Equal(baseSpeed, sim.PlayerEffectiveSpeed);
+    }
+
+    [Fact]
+    public void FieldPickup_ClearedAtStageEnd() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        // Spawn a pickup and add an active effect
+        sim.SpawnFieldPickup(new FieldPickup(new Vector2(500, 500), FieldPickupType.SpeedBoost));
+        sim.ActiveFieldEffects.Add(new ActiveFieldEffect(FieldPickupType.DoubleDamage, 30f, 2.0f));
+
+        Assert.Single(sim.FieldPickups);
+        Assert.Single(sim.ActiveFieldEffects);
+
+        // Move player to safehouse to trigger EnterSafehouse
+        RevealAndEnterSafehouse(sim);
+
+        Assert.Empty(sim.FieldPickups);
+        Assert.Empty(sim.ActiveFieldEffects);
+    }
+
+    [Fact]
+    public void FieldPickup_SpawnsPeriodically() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        
+        Assert.Empty(sim.FieldPickups);
+
+        // Step by 44 seconds. No pickup should spawn yet.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 44f);
+        Assert.Empty(sim.FieldPickups);
+
+        // Step 1 more second (total 45s). A pickup should spawn.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 1.1f);
+        Assert.Single(sim.FieldPickups);
+        
+        var pickup = sim.FieldPickups[0];
+        Assert.True(pickup.Position.X >= 0 && pickup.Position.X <= sim.ArenaSize.X);
+        Assert.True(pickup.Position.Y >= 0 && pickup.Position.Y <= sim.ArenaSize.Y);
     }
 }
 

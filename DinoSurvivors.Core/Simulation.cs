@@ -33,9 +33,33 @@ public class Simulation {
     public List<JurassicCashDrop> JurassicCashDrops { get; } = new();
     private const float CashDropChance = 0.20f;
 
-    public float PlayerEffectivePickupRadius => PlayerPickupRadius * GetPermanentUpgradeMultiplier(PassiveStat.PickupRadius) * GetPassiveMultiplier(PassiveStat.PickupRadius);
-    public float PlayerEffectiveSpeed => PlayerSpeed * GetPermanentUpgradeMultiplier(PassiveStat.MoveSpeed) * GetPassiveMultiplier(PassiveStat.MoveSpeed);
-    public float PlayerEffectiveMaxHp => PlayerMaxHp * GetPermanentUpgradeMultiplier(PassiveStat.MaxHp) * GetPassiveMultiplier(PassiveStat.MaxHp);
+    public List<FieldPickup> FieldPickups { get; } = new();
+    public List<ActiveFieldEffect> ActiveFieldEffects { get; } = new();
+    public event Action<FieldPickup>? OnFieldPickupCollected;
+
+    public void SpawnFieldPickup(FieldPickup pickup) {
+        FieldPickups.Add(pickup);
+    }
+
+    public float PlayerEffectivePickupRadius => PlayerPickupRadius * GetPermanentUpgradeMultiplier(PassiveStat.PickupRadius) * GetPassiveMultiplier(PassiveStat.PickupRadius) * GetFieldPickupMultiplier(PassiveStat.PickupRadius);
+    public float PlayerEffectiveSpeed => PlayerSpeed * GetPermanentUpgradeMultiplier(PassiveStat.MoveSpeed) * GetPassiveMultiplier(PassiveStat.MoveSpeed) * GetFieldPickupMultiplier(PassiveStat.MoveSpeed);
+    public float PlayerEffectiveMaxHp => PlayerMaxHp * GetPermanentUpgradeMultiplier(PassiveStat.MaxHp) * GetPassiveMultiplier(PassiveStat.MaxHp) * GetFieldPickupMultiplier(PassiveStat.MaxHp);
+
+    private float GetFieldPickupMultiplier(PassiveStat stat) {
+        float multiplier = 1f;
+        foreach (var effect in ActiveFieldEffects) {
+            var effectStat = effect.Type switch {
+                FieldPickupType.DoubleDamage => PassiveStat.Damage,
+                FieldPickupType.SpeedBoost => PassiveStat.MoveSpeed,
+                FieldPickupType.Magnet => PassiveStat.PickupRadius,
+                _ => (PassiveStat?)null
+            };
+            if (effectStat == stat) {
+                multiplier *= effect.Multiplier;
+            }
+        }
+        return multiplier;
+    }
 
     private float GetPassiveMultiplier(PassiveStat stat) {
         var passive = EquippedPassives.Find(p => p.Definition.Stat == stat);
@@ -187,6 +211,9 @@ public class Simulation {
     private float _spawnTimer = 0f;
     private const float MinSpawnRadius = 450f;
     private const float MaxSpawnRadius = 800f;
+
+    private float _fieldPickupSpawnTimer = 0f;
+    public const float FieldPickupSpawnInterval = 45f;
 
     public Simulation(IRng rng, IPersistence persistence, IContentProvider content) {
         _rng = rng;
@@ -383,6 +410,10 @@ public class Simulation {
     }
 
     public void Step(ControlActions actions, float deltaTime) {
+        if (actions.Pause) {
+            TogglePause();
+        }
+
         if (IsRunLost || IsPaused || IsPausedForLevelUp || IsPausedForSafehouseBreak) {
             return;
         }
@@ -410,7 +441,7 @@ public class Simulation {
                             aimDir = Vector2.Normalize(aimDir);
                         }
                         var data = weapon.CurrentLevelData;
-                        var effectiveDamage = data.Damage * GetPermanentUpgradeMultiplier(PassiveStat.Damage) * GetPassiveMultiplier(PassiveStat.Damage);
+                        var effectiveDamage = data.Damage * GetPermanentUpgradeMultiplier(PassiveStat.Damage) * GetPassiveMultiplier(PassiveStat.Damage) * GetFieldPickupMultiplier(PassiveStat.Damage);
                         Projectiles.Add(new Projectile(
                             PlayerPosition,
                             aimDir,
@@ -420,12 +451,12 @@ public class Simulation {
                             data.PierceCount,
                             data.ExplosionRadius
                         ));
-                        weapon.CooldownTimer = data.Cooldown * GetPermanentUpgradeMultiplier(PassiveStat.WeaponCooldown) * GetPassiveMultiplier(PassiveStat.WeaponCooldown);
+                        weapon.CooldownTimer = data.Cooldown * GetPermanentUpgradeMultiplier(PassiveStat.WeaponCooldown) * GetPassiveMultiplier(PassiveStat.WeaponCooldown) * GetFieldPickupMultiplier(PassiveStat.WeaponCooldown);
                     }
                 } else {
                     // Autonomous area zapper behavior
                     var data = weapon.CurrentLevelData;
-                    var autonomousDamage = data.Damage * GetPermanentUpgradeMultiplier(PassiveStat.Damage) * GetPassiveMultiplier(PassiveStat.Damage);
+                    var autonomousDamage = data.Damage * GetPermanentUpgradeMultiplier(PassiveStat.Damage) * GetPassiveMultiplier(PassiveStat.Damage) * GetFieldPickupMultiplier(PassiveStat.Damage);
                     for (int j = Enemies.Count - 1; j >= 0; j--) {
                         var enemy = Enemies[j];
                         var dist = Vector2.Distance(PlayerPosition, enemy.Position);
@@ -442,7 +473,7 @@ public class Simulation {
                             }
                         }
                     }
-                    weapon.CooldownTimer = data.Cooldown * GetPermanentUpgradeMultiplier(PassiveStat.WeaponCooldown) * GetPassiveMultiplier(PassiveStat.WeaponCooldown);
+                    weapon.CooldownTimer = data.Cooldown * GetPermanentUpgradeMultiplier(PassiveStat.WeaponCooldown) * GetPassiveMultiplier(PassiveStat.WeaponCooldown) * GetFieldPickupMultiplier(PassiveStat.WeaponCooldown);
                 }
             }
         }
@@ -558,6 +589,16 @@ public class Simulation {
             }
         }
 
+        // Check player-to-field-pickup collection
+        for (int i = FieldPickups.Count - 1; i >= 0; i--) {
+            var pickup = FieldPickups[i];
+            if (Vector2.Distance(PlayerPosition, pickup.Position) <= PlayerEffectivePickupRadius) {
+                ActiveFieldEffects.Add(new ActiveFieldEffect(pickup.Type, pickup.Duration, pickup.Multiplier));
+                OnFieldPickupCollected?.Invoke(pickup);
+                FieldPickups.RemoveAt(i);
+            }
+        }
+
         // Move enemies towards player (Direct Pursuit)
         foreach (var enemy in Enemies) {
             var toPlayer = PlayerPosition - enemy.Position;
@@ -630,6 +671,44 @@ public class Simulation {
             _spawnTimer -= phase.SpawnInterval;
             if (Enemies.Count < LiveEnemyCap)
                 SpawnEnemy();
+        }
+
+        _fieldPickupSpawnTimer += deltaTime;
+        if (_fieldPickupSpawnTimer >= FieldPickupSpawnInterval) {
+            _fieldPickupSpawnTimer -= FieldPickupSpawnInterval;
+            float x = (float)(_rng.NextDouble() * ArenaSize.X);
+            float y = (float)(_rng.NextDouble() * ArenaSize.Y);
+            int typeIndex = _rng.Next(0, 3);
+            var type = (FieldPickupType)typeIndex;
+            float duration = type switch {
+                FieldPickupType.DoubleDamage => 30f,
+                _ => 10f
+            };
+            float multiplier = type switch {
+                FieldPickupType.DoubleDamage => 2.0f,
+                FieldPickupType.SpeedBoost => 1.5f,
+                FieldPickupType.Magnet => 2.0f,
+                _ => 2.0f
+            };
+            FieldPickups.Add(new FieldPickup(new Vector2(x, y), type, lifetime: 15f, duration: duration, multiplier: multiplier));
+        }
+
+        // Update field pickups on the ground
+        for (int i = FieldPickups.Count - 1; i >= 0; i--) {
+            var pickup = FieldPickups[i];
+            pickup.Lifetime -= deltaTime;
+            if (pickup.Lifetime <= 0f) {
+                FieldPickups.RemoveAt(i);
+            }
+        }
+
+        // Update active field effects
+        for (int i = ActiveFieldEffects.Count - 1; i >= 0; i--) {
+            var effect = ActiveFieldEffects[i];
+            effect.Duration -= deltaTime;
+            if (effect.Duration <= 0f) {
+                ActiveFieldEffects.RemoveAt(i);
+            }
         }
 
         MergePickups();
@@ -708,9 +787,12 @@ public class Simulation {
         SaveSimulationData();
         XpGems.Clear();
         JurassicCashDrops.Clear();
+        FieldPickups.Clear();
+        ActiveFieldEffects.Clear();
         Enemies.Clear();
         Projectiles.Clear();
         _spawnTimer = 0f;
+        _fieldPickupSpawnTimer = 0f;
 
         PendingSafehouseBreakOptions.Clear();
         PendingSafehouseBreakOptions.Add(new SafehouseRewardOption { Type = SafehouseRewardType.PartialHeal, Amount = 20f });

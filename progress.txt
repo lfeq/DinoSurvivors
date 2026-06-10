@@ -134,3 +134,29 @@
 - Added 7 new headless xUnit tests covering round-trip serialization, save loading, shop purchase deduction, cost escalation, baseline stat composition, combat stat composition, and best run updating.
 - All 109 tests pass (102 pre-existing + 7 new).
 - Closed issue #15.
+- Implemented Fire Mode Setting + Pause Menu + settings (Issue #10) using /tdd.
+- Updated Simulation.Step to process actions.Pause, toggling the pause state and freezing the step update logic.
+- Updated Game1.cs to support edge-triggered pause, confirm, and cancel inputs to avoid rapid toggling.
+- Programmed a Pause Menu and a Settings sub-menu in Game1.cs update/draw loops:
+  - The Pause Menu overlay presents "RESUME", "SETTINGS", and "QUIT RUN" options.
+  - The Settings Menu overlay allows toggling "FIRE MODE" (between Auto and Manual fire) and "DAMAGE NUMBERS" (between ON and OFF).
+  - Both screens support keyboard (1/2/3, W/S/Up/Down + Enter) and mouse click/hover selection.
+  - Adjusting settings auto-saves changes to persistence via SaveSimulationData.
+- Added 1 new headless test verifying pause/unpause state toggles and simulation freezing behavior.
+- All 110 tests pass (109 pre-existing + 1 new).
+- Closed issue #10.
+- Implemented Field Pickups (timed temporary effects) (Issue #12) using /tdd.
+- Defined FieldPickupType enum (DoubleDamage, SpeedBoost, Magnet), FieldPickup (ground-space item), and ActiveFieldEffect (active buff) classes.
+- Added FieldPickups and ActiveFieldEffects lists to Simulation, along with the OnFieldPickupCollected event and SpawnFieldPickup injection method.
+- Updated Simulation.Step to:
+  - Check player-to-pickup collection within PlayerEffectivePickupRadius, firing OnFieldPickupCollected and adding the ActiveFieldEffect on collection.
+  - Tick down and expire ground pickups (Lifetime) and active buffs (Duration) by deltaTime.
+  - Periodically spawn random Field Pickups in the arena on a 45-second interval using _rng.
+- Integrated temporary stat multipliers in effective stat properties (speed, pickup radius, max HP) and combat calculation steps (damage, weapon cooldowns).
+- Updated EnterSafehouse to clear all ground pickups and active buffs at stage transitions.
+- Added 6 new headless unit tests covering spawning, lifetime expiration, collection range/events, stat composition/multiplicative stacking, duration expiration, stage transitions, and periodic spawning.
+- All 116 tests pass (110 pre-existing + 6 new).
+- Closed issue #12.
+- Updated PRD issue tracking and closed Issue #1 (PRD: DinoSurvivors PC MVP) as fully implemented.
+
+
