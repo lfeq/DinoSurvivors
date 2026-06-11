@@ -158,5 +158,19 @@
 - All 116 tests pass (110 pre-existing + 6 new).
 - Closed issue #12.
 - Updated PRD issue tracking and closed Issue #1 (PRD: DinoSurvivors PC MVP) as fully implemented.
-
-
+- Implemented CI Slice 1: single-platform macOS release pipeline (Issue #18).
+- Added `.github/workflows/release.yml`: triggers on push to main only, sets up .NET 9 SDK, runs `dotnet publish -r osx-arm64` self-contained single-file, marks the binary executable, archives the entire publish directory to DinoSurvivors-macOS.zip, and creates a GitHub Release tagged `v0.0.${{ github.run_number }}` with the short commit SHA in the title and macOS Gatekeeper workaround instructions in the release notes.
+- Concurrency group cancels superseded in-progress runs. Workflow does NOT trigger on tag pushes to avoid loops.
+- No new C# tests added (CI YAML only); all 116 existing tests still pass.
+- Closed issue #18.
+- Implemented CI Slice 2: Windows target + dedicated release job (Issue #19).
+- Refactored `.github/workflows/release.yml` into three jobs: `build-macos` (macos-14, osx-arm64) and `build-windows` (windows-latest, win-x64) run in parallel — each publishes, archives, and uploads a zip artifact; a dedicated `release` job (ubuntu-latest, needs both builds) downloads both artifacts and creates ONE GitHub Release with both zips attached.
+- Windows archive uses PowerShell `Compress-Archive`; release notes now cover both macOS Gatekeeper and Windows SmartScreen workarounds.
+- Deleted obsolete `scripts/build-macos.sh` and `scripts/build-windows.sh`; the workflow is now the single source of truth for release builds.
+- No new C# tests added (CI YAML only); all 116 existing tests still pass.
+- Closed issue #19.
+- Implemented CI Slice 3: test gate before builds (Issue #20).
+- Added a `test` job to `.github/workflows/release.yml` that runs on `ubuntu-latest` and executes `dotnet test DinoSurvivors.Tests/`.
+- Added `needs: test` to both `build-macos` and `build-windows` jobs so a failing test suite blocks artifact creation and the GitHub Release.
+- No new C# tests added (CI YAML only); all 116 existing tests still pass.
+- Closed issue #20.
