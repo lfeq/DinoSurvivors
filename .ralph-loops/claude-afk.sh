@@ -11,7 +11,7 @@ PROMPT_PATH="$SCRIPT_DIR/prompt.md"
 PROMPT=$(cat "$PROMPT_PATH")
 
 for ((i=1; i<=$1; i++)); do
-    echo "====== Starting Claude iteration $i of $1 in isolated sandbox... ======"
+    echo "====== Starting Claude iteration $i of $1... ======"
 
     result=$(claude --permission-mode bypassPermissions --model claude-sonnet-4-6 -p "$PROMPT")
 

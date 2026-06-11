@@ -1364,6 +1364,1081 @@ public class SimulationTests {
         Assert.Equal(2, sim.PlayerLevel);
         Assert.Equal(200f, sim.XpToNextLevel); // Level 2: 100 * 2
     }
+
+    // --- Issue #14: Stage lifecycle ---
+
+    [Fact]
+    public void StageExitRevealedAfterTenMinutes() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        Assert.False(sim.IsStageExitRevealed);
+
+        sim.StageTimeElapsed = 599f;
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0f);
+        Assert.False(sim.IsStageExitRevealed);
+
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 1f);
+        Assert.True(sim.IsStageExitRevealed);
+    }
+
+    [Fact]
+    public void SafehouseRevealedAtArenaBoundary() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.StageTimeElapsed = 599f;
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 1f);
+
+        Assert.True(sim.IsStageExitRevealed);
+        var pos = sim.SafehousePosition;
+        bool onBoundary = pos.X <= 0 || pos.X >= sim.ArenaSize.X ||
+                          pos.Y <= 0 || pos.Y >= sim.ArenaSize.Y;
+        Assert.True(onBoundary, $"Safehouse at {pos} is not on arena boundary");
+        Assert.True(pos.X >= 0 && pos.X <= sim.ArenaSize.X);
+        Assert.True(pos.Y >= 0 && pos.Y <= sim.ArenaSize.Y);
+    }
+
+    [Fact]
+    public void EnemiesKeepSpawningAfterStageExitReveals() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.StageTimeElapsed = 599f;
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 1.6f); // past reveal + spawn interval
+        Assert.True(sim.IsStageExitRevealed);
+        Assert.NotEmpty(sim.Enemies);
+    }
+
+    [Fact]
+    public void ExitMarkerDirectionPointsTowardSafehouse() {
+        // StubRng: NextValue=0 → edge 0 (top), NextDoubleValue=0.5 → t=0.5 → safehouse at (1000, 0)
+        // Player at (1000, 1000). Direction = (0, -1).
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        Assert.Equal(Vector2.Zero, sim.ExitMarkerDirection);
+
+        sim.StageTimeElapsed = 599f;
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 1f);
+        Assert.True(sim.IsStageExitRevealed);
+
+        var dir = sim.ExitMarkerDirection;
+        Assert.Equal(0f, dir.X, 3);
+        Assert.Equal(-1f, dir.Y, 3);
+    }
+
+    // Helper: reveals stage exit and moves player into the safehouse zone.
+    // With StubRng (NextValue=0, NextDoubleValue=0.5) safehouse is placed at (1000, 0) (top edge center).
+    private static void RevealAndEnterSafehouse(Simulation sim) {
+        sim.StageTimeElapsed = 599f;
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 1f);
+        // Player at (1000, 1000), safehouse at (1000, 0). Move -Y by 5.1s.
+        sim.Step(new ControlActions(new Vector2(0, -1), Vector2.Zero), 5.1f);
+    }
+
+    [Fact]
+    public void EnteringSafehouseZoneConvertsCashBeforeBreak() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.JurassicCashDrops.Add(new JurassicCashDrop(sim.PlayerPosition, 50));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+        Assert.Equal(50, sim.UnbankedJurassicCash);
+        Assert.Equal(0, sim.BankedJurassicCash);
+
+        RevealAndEnterSafehouse(sim);
+
+        Assert.True(sim.IsPausedForSafehouseBreak);
+        Assert.Equal(0, sim.UnbankedJurassicCash);
+        Assert.Equal(50, sim.BankedJurassicCash);
+    }
+
+    [Fact]
+    public void EnteringSafehouseZonePausesWithThreeRewardOptions() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        RevealAndEnterSafehouse(sim);
+
+        Assert.True(sim.IsPausedForSafehouseBreak);
+        Assert.Equal(3, sim.PendingSafehouseBreakOptions.Count);
+    }
+
+    [Fact]
+    public void SafehouseBreakOffersAllThreeRewardTypes() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        RevealAndEnterSafehouse(sim);
+
+        var types = sim.PendingSafehouseBreakOptions.Select(o => o.Type).ToList();
+        Assert.Contains(SafehouseRewardType.PartialHeal, types);
+        Assert.Contains(SafehouseRewardType.BankedCashBonus, types);
+        Assert.Contains(SafehouseRewardType.BonusXp, types);
+    }
+
+    [Fact]
+    public void SimDoesNotStepWhilePausedForSafehouseBreak() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        RevealAndEnterSafehouse(sim);
+        Assert.True(sim.IsPausedForSafehouseBreak);
+
+        sim.SpawnEnemyAt(new Vector2(1200, 1200));
+        var enemyPosBefore = sim.Enemies[0].Position;
+        var playerPosBefore = sim.PlayerPosition;
+
+        sim.Step(new ControlActions(new Vector2(1, 0), Vector2.Zero), 1f);
+
+        Assert.Equal(enemyPosBefore, sim.Enemies[0].Position);
+        Assert.Equal(playerPosBefore, sim.PlayerPosition);
+    }
+
+    [Fact]
+    public void SelectingPartialHealRestoresHpButNotFull() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        // Deal 40 HP damage (4 enemies × 10) so the 20 HP partial heal cannot fully restore
+        for (int i = 0; i < 4; i++)
+            sim.SpawnEnemyAt(sim.PlayerPosition);
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+        float damagedHp = sim.PlayerCurrentHp; // 100 - 40 = 60 HP
+        Assert.True(damagedHp < sim.PlayerMaxHp);
+        sim.Enemies.Clear(); // remove so they don't interfere during safehouse movement
+
+        RevealAndEnterSafehouse(sim);
+
+        int idx = sim.PendingSafehouseBreakOptions.FindIndex(o => o.Type == SafehouseRewardType.PartialHeal);
+        sim.SelectSafehouseRewardOption(idx);
+
+        Assert.False(sim.IsPausedForSafehouseBreak);
+        Assert.True(sim.PlayerCurrentHp > damagedHp);
+        Assert.True(sim.PlayerCurrentHp < sim.PlayerEffectiveMaxHp, "Partial heal should not fully restore HP");
+    }
+
+    [Fact]
+    public void SelectingBankedCashBonusIncreasesBankedCash() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        RevealAndEnterSafehouse(sim);
+        int bankedBefore = sim.BankedJurassicCash;
+
+        int idx = sim.PendingSafehouseBreakOptions.FindIndex(o => o.Type == SafehouseRewardType.BankedCashBonus);
+        sim.SelectSafehouseRewardOption(idx);
+
+        Assert.False(sim.IsPausedForSafehouseBreak);
+        Assert.True(sim.BankedJurassicCash > bankedBefore);
+    }
+
+    [Fact]
+    public void SelectingBonusXpAddsXpToPlayer() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        RevealAndEnterSafehouse(sim);
+        float xpBefore = sim.PlayerXp;
+
+        int idx = sim.PendingSafehouseBreakOptions.FindIndex(o => o.Type == SafehouseRewardType.BonusXp);
+        sim.SelectSafehouseRewardOption(idx);
+
+        Assert.False(sim.IsPausedForSafehouseBreak);
+        Assert.True(sim.PlayerXp > xpBefore || sim.IsPausedForLevelUp);
+    }
+
+    [Fact]
+    public void AfterSafehouseBreak_StageAdvancesWithCarryForward() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.TryAddOrUpgradePassive("RunningShoes");
+        sim.TryAddOrUpgradeWeapon("FlareGun");
+        var hpBefore = sim.PlayerCurrentHp;
+
+        RevealAndEnterSafehouse(sim);
+        sim.SelectSafehouseRewardOption(0); // any reward
+
+        Assert.Equal(2, sim.StageNumber);
+        Assert.Equal(0f, sim.StageTimeElapsed, 1);
+        Assert.False(sim.IsStageExitRevealed);
+        Assert.False(sim.IsPausedForSafehouseBreak);
+        // Weapons and passives carried forward
+        Assert.True(sim.EquippedWeapons.Count >= 2);
+        Assert.Single(sim.EquippedPassives);
+    }
+
+    [Fact]
+    public void UncollectedPickupsAbandonedOnStageExit() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.XpGems.Add(new XpGem(new Vector2(500, 500), 10f));
+        sim.JurassicCashDrops.Add(new JurassicCashDrop(new Vector2(600, 600), 5));
+
+        RevealAndEnterSafehouse(sim);
+
+        Assert.Empty(sim.XpGems);
+        Assert.Empty(sim.JurassicCashDrops);
+    }
+
+    [Fact]
+    public void AfterStage3SafehouseBreak_AdvancesToHeliportStage() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.StageNumber = 3;
+
+        RevealAndEnterSafehouse(sim);
+        sim.SelectSafehouseRewardOption(0);
+
+        Assert.False(sim.IsRunComplete);
+        Assert.Equal(Simulation.HeliportStageNumber, sim.StageNumber);
+        Assert.NotNull(sim.TRex);
+        Assert.False(sim.TRex!.IsDefeated);
+    }
+
+    // Helper: advance simulation through stage 3 into the Heliport stage.
+    // With StubRng, safehouse is at (1000, 0) so player ends at top boundary before stage 4.
+    private static Simulation AdvanceToHeliportStage() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.StageNumber = 3;
+        RevealAndEnterSafehouse(sim);
+        sim.SelectSafehouseRewardOption(0);
+        return sim;
+    }
+
+    // Helper: step the sim many times with small dt for predictable state-machine progression.
+    private static readonly ControlActions NoInput = new(Vector2.Zero, Vector2.Zero);
+    private static void StepMany(Simulation sim, float totalTime, ControlActions? actions = null) {
+        var act = actions ?? NoInput;
+        const float dt = 0.05f;
+        for (float t = 0f; t < totalTime; t += dt)
+            sim.Step(act, MathF.Min(dt, totalTime - t));
+    }
+
+    // --- Issue #16: Heliport + Boss Arena Lock-In + T-Rex boss + win ---
+
+    [Fact]
+    public void HeliportStage_TRexSpawnsAtBossArenaCenter() {
+        var sim = AdvanceToHeliportStage();
+
+        Assert.NotNull(sim.TRex);
+        Assert.Equal(sim.BossArenaCenter, sim.TRex!.Position);
+        Assert.Equal(1500f, sim.TRex.MaxHp);
+        Assert.False(sim.TRex.IsDefeated);
+    }
+
+    [Fact]
+    public void EnteringBossArenaRadius_TriggersBossArenaLockIn() {
+        var sim = AdvanceToHeliportStage();
+        // Player at (1000, 0) after stage-3 safehouse. BossArenaCenter=(1000,1000), radius=600.
+        // Must walk south ~400 units to enter arena.
+        Assert.False(sim.IsBossArenaLocked);
+
+        // 2.1s at 200f/s = 420 units south → (1000, 420), dist to center = 580 < 600 → locked
+        StepMany(sim, 2.1f, new ControlActions(new Vector2(0, 1), Vector2.Zero));
+
+        Assert.True(sim.IsBossArenaLocked);
+    }
+
+    [Fact]
+    public void BossArenaLockIn_ClampsPlayerInsideRadius() {
+        var sim = AdvanceToHeliportStage();
+        sim.Enemies.Clear(); // avoid enemy interference
+
+        StepMany(sim, 2.1f, new ControlActions(new Vector2(0, 1), Vector2.Zero)); // enter arena
+        Assert.True(sim.IsBossArenaLocked);
+
+        // Walk north (away from center) for a long time — clamp must keep player inside
+        StepMany(sim, 10f, new ControlActions(new Vector2(0, -1), Vector2.Zero));
+
+        var dist = Vector2.Distance(sim.PlayerPosition, sim.BossArenaCenter);
+        Assert.True(dist <= sim.BossArenaRadius + 1f,
+            $"Player {dist} units from center, max allowed: {sim.BossArenaRadius}");
+    }
+
+    [Fact]
+    public void ProjectileHitsTRex_DealsDamage() {
+        var sim = AdvanceToHeliportStage();
+        var trex = sim.TRex!;
+        float hpBefore = trex.Hp;
+
+        // Place projectile at T-Rex position; it should register as a hit on step
+        sim.Projectiles.Add(new Projectile(trex.Position, Vector2.UnitX, damage: 100f));
+        sim.Step(NoInput, 0f);
+
+        Assert.Equal(hpBefore - 100f, trex.Hp, 2f);
+        Assert.Empty(sim.Projectiles); // consumed
+    }
+
+    [Fact]
+    public void TRexContactDamagesPlayer() {
+        var sim = AdvanceToHeliportStage();
+        var trex = sim.TRex!;
+        float hpBefore = sim.PlayerCurrentHp;
+
+        // Place T-Rex on top of player
+        trex.Position = sim.PlayerPosition;
+        sim.Step(NoInput, 0f);
+
+        Assert.True(sim.PlayerCurrentHp < hpBefore, "T-Rex contact should damage player");
+    }
+
+    [Fact]
+    public void TRex_StartsInIdle_ThenTransitionsToCharging() {
+        var sim = AdvanceToHeliportStage();
+        var trex = sim.TRex!;
+
+        Assert.Equal(TRexAttackState.Idle, trex.AttackState);
+
+        // Phase 1 sequence: Idle(1.5s) then Charging. Use 2.0s for float-accumulation margin.
+        StepMany(sim, 2.0f);
+
+        Assert.Equal(TRexAttackState.Charging, trex.AttackState);
+    }
+
+    [Fact]
+    public void TRex_Charging_MovesPositionTowardPlayer() {
+        var sim = AdvanceToHeliportStage();
+        var trex = sim.TRex!;
+        // Player at (1000, 0), T-Rex at (1000, 1000) → charge direction is north (-Y)
+        float yBefore = trex.Position.Y;
+
+        StepMany(sim, 2.0f); // past Idle(1.5s) into Charging
+        Assert.Equal(TRexAttackState.Charging, trex.AttackState);
+
+        float yAfter = trex.Position.Y;
+        Assert.True(yAfter < yBefore, "T-Rex should move toward player (north) during charge");
+    }
+
+    [Fact]
+    public void TRex_PhaseBasedOnHpThresholds() {
+        var trex = new TRex(Vector2.Zero, 1500f);
+        // Phase boundaries: 66% = 990f, 33% = 495f. Float precision means exact multiples
+        // of MaxHp * 0.66f and MaxHp * 0.33f are fractionally above 990 / 495.
+        trex.Hp = 1500f; Assert.Equal(1, trex.Phase); // full HP = Phase 1
+        trex.Hp = 991f;  Assert.Equal(1, trex.Phase); // clearly above 66%
+        trex.Hp = 989f;  Assert.Equal(2, trex.Phase); // clearly below 66%
+        trex.Hp = 496f;  Assert.Equal(2, trex.Phase); // clearly above 33%
+        trex.Hp = 494f;  Assert.Equal(3, trex.Phase); // clearly below 33%
+        trex.Hp = 1f;    Assert.Equal(3, trex.Phase);
+    }
+
+    [Fact]
+    public void TRex_Phase2_SequenceIncludesRoaring() {
+        var sim = AdvanceToHeliportStage();
+        var trex = sim.TRex!;
+        trex.Hp = 989f; // trigger Phase 2 on next UpdateTRex call
+
+        // Phase 2 sequence: Idle(1.5) Charging(2.0) Idle(1.0) Roaring(2.5) ...
+        // Time to reach Roaring: 1.5 + 2.0 + 1.0 = 4.5s
+        StepMany(sim, 4.6f);
+
+        Assert.Equal(TRexAttackState.Roaring, trex.AttackState);
+    }
+
+    [Fact]
+    public void TRex_Roaring_DamagesPlayerWithinRoarRadius() {
+        var sim = AdvanceToHeliportStage();
+        var trex = sim.TRex!;
+        // Force T-Rex directly into Roaring state to avoid contact-damage death before Roar
+        trex.Hp = 989f; trex.LastPhase = 2;
+        trex.AttackSequenceIndex = 3; // Roaring = index 3 in Phase 2 sequence
+        trex.AttackState = TRexAttackState.Roaring;
+        // Place within RoarRadius (200f) but outside contact range (66f)
+        trex.Position = sim.PlayerPosition + new Vector2(100f, 0f);
+
+        float hpBefore = sim.PlayerCurrentHp;
+        sim.Step(NoInput, 1.0f); // 1s at 15 DPS = 15 damage
+
+        Assert.True(sim.PlayerCurrentHp < hpBefore, "Roar should deal damage within RoarRadius");
+    }
+
+    [Fact]
+    public void TRex_Phase3_SequenceIncludesTailSweep() {
+        var sim = AdvanceToHeliportStage();
+        var trex = sim.TRex!;
+        trex.Hp = 494f; // trigger Phase 3
+
+        // Phase 3: Idle(1.0) Charging(2.0) Idle(0.5) Roaring(2.5) Idle(0.5) TailSweeping(1.5)
+        // Time to TailSweeping: 1.0 + 2.0 + 0.5 + 2.5 + 0.5 = 6.5s
+        StepMany(sim, 6.6f);
+
+        Assert.Equal(TRexAttackState.TailSweeping, trex.AttackState);
+    }
+
+    [Fact]
+    public void TRex_TailSweep_DamagesPlayerWithinRadius() {
+        var sim = AdvanceToHeliportStage();
+        var trex = sim.TRex!;
+        // Force T-Rex into TailSweeping via state transition (AttackState != targetState triggers OnEnter)
+        trex.Hp = 494f; trex.LastPhase = 3;
+        trex.AttackSequenceIndex = 5; // TailSweeping = index 5 in Phase 3 sequence
+        trex.AttackState = TRexAttackState.Idle; // triggers transition on next step
+        // Place within TailSweepRadius (250f) but outside contact range (66f)
+        trex.Position = sim.PlayerPosition + new Vector2(100f, 0f);
+
+        float hpBefore = sim.PlayerCurrentHp;
+        sim.Step(NoInput, 0f); // trigger state transition only; dt=0 avoids contact damage
+
+        Assert.Equal(TRexAttackState.TailSweeping, trex.AttackState);
+        Assert.Equal(hpBefore - trex.TailSweepDamage, sim.PlayerCurrentHp, 0.01f);
+    }
+
+    [Fact]
+    public void TRex_TailSweep_DoesNotDamagePlayerOutsideRadius() {
+        var sim = AdvanceToHeliportStage();
+        var trex = sim.TRex!;
+        // Force T-Rex into TailSweeping state with player beyond TailSweepRadius (250f)
+        trex.Hp = 494f; trex.LastPhase = 3;
+        trex.AttackSequenceIndex = 5;
+        trex.AttackState = TRexAttackState.Idle;
+        trex.Position = sim.PlayerPosition + new Vector2(300f, 0f); // 300 > 250
+
+        float hpBefore = sim.PlayerCurrentHp;
+        sim.Step(NoInput, 0f); // trigger state transition only
+
+        Assert.Equal(TRexAttackState.TailSweeping, trex.AttackState);
+        Assert.Equal(hpBefore, sim.PlayerCurrentHp, 0.01f); // no tail sweep damage
+    }
+
+    [Fact]
+    public void TRex_SummonWaves_SpawnsRaptorsNearTRex() {
+        var sim = AdvanceToHeliportStage();
+        var trex = sim.TRex!;
+        // Force into SummoningWaves via state transition; count Raptors before and after
+        trex.AttackSequenceIndex = 3; // SummoningWaves = index 3 in Phase 1 sequence
+        trex.AttackState = TRexAttackState.Idle; // triggers transition on next step
+        int raptorsBefore = sim.Enemies.Count(e => e.Type == EnemyType.Raptor);
+
+        sim.Step(NoInput, 0f); // trigger OnEnter which spawns Raptors
+
+        Assert.Equal(TRexAttackState.SummoningWaves, trex.AttackState);
+        int raptorsAfter = sim.Enemies.Count(e => e.Type == EnemyType.Raptor);
+        Assert.Equal(trex.SummonCount, raptorsAfter - raptorsBefore);
+    }
+
+    [Fact]
+    public void TRex_Defeat_ReleasesLockInAndRevealsChopperZone() {
+        var sim = AdvanceToHeliportStage();
+        var trex = sim.TRex!;
+
+        // Lock the player in
+        StepMany(sim, 2.1f, new ControlActions(new Vector2(0, 1), Vector2.Zero));
+        Assert.True(sim.IsBossArenaLocked);
+        Assert.False(sim.IsChopperZoneRevealed);
+
+        // Kill T-Rex with a high-damage projectile
+        sim.Projectiles.Add(new Projectile(trex.Position, Vector2.UnitX, damage: 99999f));
+        sim.Step(NoInput, 0f);
+
+        Assert.True(trex.IsDefeated);
+        Assert.False(sim.IsBossArenaLocked); // lock-in released on defeat
+        Assert.True(sim.IsChopperZoneRevealed);
+    }
+
+    [Fact]
+    public void TouchingChopperZoneAfterDefeat_WinsRun() {
+        var sim = AdvanceToHeliportStage();
+        var trex = sim.TRex!;
+
+        // Kill T-Rex instantly
+        sim.Projectiles.Add(new Projectile(trex.Position, Vector2.UnitX, damage: 99999f));
+        sim.Step(NoInput, 0f);
+        Assert.True(trex.IsDefeated);
+        Assert.False(sim.IsRunComplete);
+
+        // Move player to chopper zone (BossArenaCenter)
+        // Player at (1000, 0); ChopperZonePosition = BossArenaCenter = (1000, 1000)
+        // Walk south; no lock-in clamp because T-Rex is defeated
+        StepMany(sim, 5.1f, new ControlActions(new Vector2(0, 1), Vector2.Zero));
+
+        Assert.True(sim.IsRunComplete, "Touching chopper zone after T-Rex defeat should win the run");
+    }
+
+    [Fact]
+    public void DyingDuringBossFight_LosesRun() {
+        var sim = AdvanceToHeliportStage();
+        var trex = sim.TRex!;
+
+        // Place T-Rex on player and remove contact cooldown
+        trex.Position = sim.PlayerPosition;
+        trex.ContactCooldownTimer = 0f;
+
+        // Reduce player HP to near zero
+        var field = typeof(Simulation).GetField("PlayerCurrentHp", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        // Use many damage hits instead of reflection
+        sim.Step(NoInput, 0f); // T-Rex contact: -30 HP
+        sim.Step(NoInput, 0.6f); // T-Rex contact after cooldown: -30 HP again ...
+
+        // Flood with contact damage by putting many enemies on top of player
+        for (int i = 0; i < 5; i++)
+            sim.SpawnEnemyAt(sim.PlayerPosition);
+        sim.Step(NoInput, 0f);
+        sim.Step(NoInput, 1.1f);
+
+        Assert.True(sim.IsRunLost, "Player should lose run when HP reaches 0 during boss fight");
+    }
+
+    [Fact]
+    public void BossArenaLockIn_BlocksEscapeBeforeTRexDefeated() {
+        var sim = AdvanceToHeliportStage();
+        sim.Enemies.Clear();
+
+        // Enter arena
+        StepMany(sim, 2.1f, new ControlActions(new Vector2(0, 1), Vector2.Zero));
+        Assert.True(sim.IsBossArenaLocked);
+
+        // Attempt to escape north
+        StepMany(sim, 10f, new ControlActions(new Vector2(0, -1), Vector2.Zero));
+
+        // Player must remain inside the boss arena boundary
+        var dist = Vector2.Distance(sim.PlayerPosition, sim.BossArenaCenter);
+        Assert.True(dist <= sim.BossArenaRadius + 1f);
+        Assert.False(sim.IsRunComplete); // cannot win without defeating T-Rex
+    }
+
+    // --- Issue #10: Pause Menu + Fire Mode Setting ---
+
+    [Fact]
+    public void QuitRunKeepsBankedCashAndClearsTempUpgrades() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.TryAddOrUpgradePassive("RunningShoes");
+        sim.TryAddOrUpgradeWeapon("FlareGun");
+
+        // Bank some cash by reaching a safehouse
+        RevealAndEnterSafehouse(sim);
+        int idx = sim.PendingSafehouseBreakOptions.FindIndex(o => o.Type == SafehouseRewardType.BankedCashBonus);
+        sim.SelectSafehouseRewardOption(idx);
+        var bankedBefore = sim.BankedJurassicCash;
+        Assert.True(bankedBefore > 0);
+
+        // Accumulate unbanked cash in the new stage by collecting a drop
+        sim.JurassicCashDrops.Add(new JurassicCashDrop(sim.PlayerPosition, 10));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+        Assert.True(sim.UnbankedJurassicCash > 0);
+
+        sim.QuitRun();
+
+        Assert.True(sim.IsRunLost);
+        Assert.Equal(bankedBefore, sim.BankedJurassicCash);
+        Assert.Equal(0, sim.UnbankedJurassicCash);
+        Assert.Empty(sim.EquippedPassives);
+    }
+
+    [Fact]
+    public void AutoFireFiresWithoutFireHeld() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        Assert.True(sim.IsAutoFireEnabled);
+
+        // Aim right without holding Fire — auto-fire should still shoot
+        var actions = new ControlActions(Vector2.Zero, new Vector2(1, 0), Fire: false);
+        sim.Step(actions, 0f);
+
+        Assert.Single(sim.Projectiles);
+    }
+
+    [Fact]
+    public void ManualFireRequiresFireHeld() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.IsAutoFireEnabled = false;
+
+        // Aim right but don't hold Fire — manual fire should NOT shoot
+        sim.Step(new ControlActions(Vector2.Zero, new Vector2(1, 0), Fire: false), 0f);
+        Assert.Empty(sim.Projectiles);
+
+        // Hold Fire — now it should shoot
+        sim.Step(new ControlActions(Vector2.Zero, new Vector2(1, 0), Fire: true), 0f);
+        Assert.Single(sim.Projectiles);
+    }
+
+    [Fact]
+    public void ManualFireCooldownGatingPreventsRateBypass() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.IsAutoFireEnabled = false;
+
+        var fireActions = new ControlActions(Vector2.Zero, new Vector2(1, 0), Fire: true);
+
+        // First shot fires immediately (cooldown starts at 0)
+        sim.Step(fireActions, 0f);
+        Assert.Single(sim.Projectiles);
+
+        // Calling Step again immediately with Fire held — cooldown not expired, no extra shot
+        sim.Step(fireActions, 0f);
+        Assert.Single(sim.Projectiles); // still just one projectile
+    }
+
+    [Fact]
+    public void TogglingFireModeDoesNotResetCooldownTimers() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        // Fire once in auto-fire mode; cooldown timer is now set
+        sim.Step(new ControlActions(Vector2.Zero, new Vector2(1, 0)), 0f);
+        var cooldownAfterFire = sim.EquippedWeapons[0].CooldownTimer;
+        Assert.True(cooldownAfterFire > 0f);
+
+        // Toggle to manual fire — cooldown should be unchanged
+        sim.IsAutoFireEnabled = false;
+        Assert.Equal(cooldownAfterFire, sim.EquippedWeapons[0].CooldownTimer);
+
+        // Toggle back to auto-fire — still unchanged
+        sim.IsAutoFireEnabled = true;
+        Assert.Equal(cooldownAfterFire, sim.EquippedWeapons[0].CooldownTimer);
+    }
+
+    [Fact]
+    public void PauseMenuFreezesSimulation() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        sim.SpawnEnemyAt(new Vector2(1200, 1000));
+        var enemyPosBefore = sim.Enemies[0].Position;
+        var playerPosBefore = sim.PlayerPosition;
+
+        sim.TogglePause();
+        Assert.True(sim.IsPaused);
+
+        sim.Step(new ControlActions(new Vector2(1, 0), Vector2.Zero), 1f);
+
+        Assert.Equal(enemyPosBefore, sim.Enemies[0].Position);
+        Assert.Equal(playerPosBefore, sim.PlayerPosition);
+    }
+
+    [Fact]
+    public void PauseControlActionTogglesSimulationPause() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        Assert.False(sim.IsPaused);
+
+        // Pause control action should pause simulation
+        sim.Step(new ControlActions(System.Numerics.Vector2.Zero, System.Numerics.Vector2.Zero, Pause: true), 1f);
+        Assert.True(sim.IsPaused);
+
+        // While paused, normal updates do not advance time or state
+        sim.SpawnEnemyAt(new System.Numerics.Vector2(1200, 1000));
+        var enemyPosBefore = sim.Enemies[0].Position;
+        var playerPosBefore = sim.PlayerPosition;
+        sim.Step(new ControlActions(new System.Numerics.Vector2(1, 0), System.Numerics.Vector2.Zero), 1f);
+        Assert.Equal(enemyPosBefore, sim.Enemies[0].Position);
+        Assert.Equal(playerPosBefore, sim.PlayerPosition);
+
+        // Pause control action again should unpause simulation
+        sim.Step(new ControlActions(System.Numerics.Vector2.Zero, System.Numerics.Vector2.Zero, Pause: true), 1f);
+        Assert.False(sim.IsPaused);
+
+        // Normal updates should now advance state
+        sim.Step(new ControlActions(new System.Numerics.Vector2(1, 0), System.Numerics.Vector2.Zero), 1f);
+        Assert.NotEqual(playerPosBefore, sim.PlayerPosition);
+    }
+
+    [Fact]
+    public void GetUpgradeOptionLabel_NewWeapon_ReturnsCorrectLabel() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        var option = new UpgradeOption { Type = UpgradeType.NewWeapon, ItemId = "TranqPistol" };
+
+        var label = sim.GetUpgradeOptionLabel(option);
+
+        Assert.Equal("TRANQ PISTOL - NEW", label);
+    }
+
+    [Fact]
+    public void GetUpgradeOptionLabel_WeaponUpgrade_ReturnsCorrectLabel() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        var option = new UpgradeOption { Type = UpgradeType.WeaponUpgrade, ItemId = "TranqPistol" };
+
+        var label = sim.GetUpgradeOptionLabel(option);
+
+        Assert.Equal("TRANQ PISTOL - LV 1->2", label);
+    }
+
+    [Fact]
+    public void GetUpgradeOptionLabel_PassivesAndFallback_ReturnsCorrectLabels() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        
+        // Test NewPassive
+        var newPassiveOpt = new UpgradeOption { Type = UpgradeType.NewPassive, ItemId = "RunningShoes" };
+        Assert.Equal("RUNNING SHOES - NEW", sim.GetUpgradeOptionLabel(newPassiveOpt));
+
+        // Test PassiveUpgrade
+        // Equip RunningShoes first
+        sim.TryAddOrUpgradePassive("RunningShoes");
+        var upgradePassiveOpt = new UpgradeOption { Type = UpgradeType.PassiveUpgrade, ItemId = "RunningShoes" };
+        Assert.Equal("RUNNING SHOES - LV 1->2", sim.GetUpgradeOptionLabel(upgradePassiveOpt));
+
+        // Test CashFallback
+        var fallbackOpt = new UpgradeOption { Type = UpgradeType.CashFallback };
+        Assert.Equal("+25 JURASSIC CASH", sim.GetUpgradeOptionLabel(fallbackOpt));
+    }
+
+    // --- Issue #15: Save Data + Souvenir Shop + Permanent Upgrades ---
+
+    [Fact]
+    public void SaveDataRoundTripsCorrectly() {
+        var persistence = new StubPersistence();
+        var data = new SaveData {
+            BankedJurassicCash = 350,
+            IsAutoFireEnabled = false,
+            ShowFloatingDamageNumbers = false,
+            PermanentUpgradeRanks = new System.Collections.Generic.Dictionary<string, int> {
+                { "MaxHp", 2 },
+                { "Damage", 1 }
+            },
+            BestRun = new BestRunSummary {
+                MaxStageReached = 3,
+                MaxLevelReached = 12,
+                MaxTimeSurvived = 605.5f,
+                MaxCashCollected = 240
+            }
+        };
+
+        persistence.Save(data);
+        var loaded = persistence.Load();
+
+        Assert.NotNull(loaded);
+        Assert.Equal(350, loaded.BankedJurassicCash);
+        Assert.False(loaded.IsAutoFireEnabled);
+        Assert.False(loaded.ShowFloatingDamageNumbers);
+        Assert.Equal(2, loaded.PermanentUpgradeRanks["MaxHp"]);
+        Assert.Equal(1, loaded.PermanentUpgradeRanks["Damage"]);
+        Assert.Equal(3, loaded.BestRun.MaxStageReached);
+        Assert.Equal(12, loaded.BestRun.MaxLevelReached);
+        Assert.Equal(605.5f, loaded.BestRun.MaxTimeSurvived);
+        Assert.Equal(240, loaded.BestRun.MaxCashCollected);
+    }
+
+    [Fact]
+    public void SimulationLoadsSaveDataOnStartup() {
+        var rng = new StubRng();
+        var persistence = new StubPersistence();
+        var data = new SaveData {
+            BankedJurassicCash = 420,
+            IsAutoFireEnabled = false,
+            ShowFloatingDamageNumbers = false,
+            PermanentUpgradeRanks = new System.Collections.Generic.Dictionary<string, int> {
+                { "MaxHp", 2 }
+            }
+        };
+        persistence.Save(data);
+
+        var sim = new Simulation(rng, persistence, new StubContentProvider());
+
+        Assert.Equal(420, sim.BankedJurassicCash);
+        Assert.False(sim.IsAutoFireEnabled);
+        Assert.False(sim.ShowFloatingDamageNumbers);
+        Assert.Equal(2, sim.GetPermanentUpgradeRank("MaxHp"));
+        Assert.Equal(0, sim.GetPermanentUpgradeRank("Damage"));
+    }
+
+    [Fact]
+    public void SouvenirShopPurchaseDeductsCashAndEscalatesCost() {
+        var rng = new StubRng();
+        var persistence = new StubPersistence();
+        var data = new SaveData {
+            BankedJurassicCash = 1000
+        };
+        persistence.Save(data);
+
+        var sim = new Simulation(rng, persistence, new StubContentProvider());
+
+        Assert.Equal(0, sim.GetPermanentUpgradeRank("MaxHp"));
+        Assert.Equal(100, sim.GetPermanentUpgradeCost("MaxHp", 1));
+
+        // Buy Rank 1
+        bool success1 = sim.BuyPermanentUpgrade("MaxHp");
+        Assert.True(success1);
+        Assert.Equal(1, sim.GetPermanentUpgradeRank("MaxHp"));
+        Assert.Equal(900, sim.BankedJurassicCash);
+        Assert.Equal(250, sim.GetPermanentUpgradeCost("MaxHp", 2));
+
+        // Buy Rank 2
+        bool success2 = sim.BuyPermanentUpgrade("MaxHp");
+        Assert.True(success2);
+        Assert.Equal(2, sim.GetPermanentUpgradeRank("MaxHp"));
+        Assert.Equal(650, sim.BankedJurassicCash);
+        Assert.Equal(500, sim.GetPermanentUpgradeCost("MaxHp", 3));
+
+        // Buy Rank 3
+        bool success3 = sim.BuyPermanentUpgrade("MaxHp");
+        Assert.True(success3);
+        Assert.Equal(3, sim.GetPermanentUpgradeRank("MaxHp"));
+        Assert.Equal(150, sim.BankedJurassicCash);
+        Assert.Equal(-1, sim.GetPermanentUpgradeCost("MaxHp", 4));
+
+        // Try to buy Rank 4 (should fail because rank cap is 3)
+        bool success4 = sim.BuyPermanentUpgrade("MaxHp");
+        Assert.False(success4);
+        Assert.Equal(3, sim.GetPermanentUpgradeRank("MaxHp"));
+        Assert.Equal(150, sim.BankedJurassicCash);
+
+        // Try to buy a different upgrade with insufficient cash (cost 100, we have 150)
+        // Let's buy "Damage" rank 1
+        bool successDamage1 = sim.BuyPermanentUpgrade("Damage");
+        Assert.True(successDamage1);
+        Assert.Equal(1, sim.GetPermanentUpgradeRank("Damage"));
+        Assert.Equal(50, sim.BankedJurassicCash);
+
+        // Try to buy "Damage" rank 2 with insufficient cash (cost 250, we have 50)
+        bool successDamage2 = sim.BuyPermanentUpgrade("Damage");
+        Assert.False(successDamage2);
+        Assert.Equal(1, sim.GetPermanentUpgradeRank("Damage"));
+        Assert.Equal(50, sim.BankedJurassicCash);
+    }
+
+    [Fact]
+    public void PermanentUpgradesRaisePlayerBaselineStats() {
+        var rng = new StubRng();
+        var persistence = new StubPersistence();
+        var data = new SaveData {
+            BankedJurassicCash = 1000
+        };
+        persistence.Save(data);
+
+        var sim = new Simulation(rng, persistence, new StubContentProvider());
+
+        // Buy rank 1 of each upgrade
+        Assert.True(sim.BuyPermanentUpgrade("MaxHp"));
+        Assert.True(sim.BuyPermanentUpgrade("MoveSpeed"));
+        Assert.True(sim.BuyPermanentUpgrade("PickupRadius"));
+        Assert.True(sim.BuyPermanentUpgrade("Damage"));
+        Assert.True(sim.BuyPermanentUpgrade("WeaponCooldown"));
+
+        // Verify effective stats:
+        // Max HP: base 100 * 1.10 = 110
+        Assert.Equal(110f, sim.PlayerEffectiveMaxHp);
+        // Move Speed: base 200 * 1.10 = 220
+        Assert.Equal(220f, sim.PlayerEffectiveSpeed);
+        // Pickup Radius: base 45 * 1.10 = 49.5
+        Assert.Equal(49.5f, sim.PlayerEffectivePickupRadius);
+
+        // Verify compounding with passive items:
+        // Add running shoes (Multiplier = 1.15)
+        sim.TryAddOrUpgradePassive("RunningShoes");
+        // Speed: base 200 * permanent 1.10 * passive 1.15 = 253
+        Assert.Equal(253f, sim.PlayerEffectiveSpeed);
+    }
+
+    [Fact]
+    public void PermanentUpgradesModifyProjectileDamageAndWeaponCooldown() {
+        var rng = new StubRng();
+        var persistence = new StubPersistence();
+        var data = new SaveData {
+            BankedJurassicCash = 1000
+        };
+        persistence.Save(data);
+
+        var sim = new Simulation(rng, persistence, new StubContentProvider());
+
+        // Buy Damage and Weapon Cooldown
+        Assert.True(sim.BuyPermanentUpgrade("Damage"));
+        Assert.True(sim.BuyPermanentUpgrade("WeaponCooldown"));
+
+        // Step once to fire a projectile
+        sim.Step(new ControlActions(Vector2.Zero, new Vector2(1, 0)), 0f);
+
+        // Projectile damage: 10 base * 1.10 = 11
+        Assert.Single(sim.Projectiles);
+        Assert.Equal(11f, sim.Projectiles[0].Damage);
+
+        // Weapon cooldown: 0.8s base * 0.90 = 0.72
+        Assert.Equal(0.72f, sim.EquippedWeapons[0].CooldownTimer, 3);
+    }
+
+    [Fact]
+    public void BestRunSummaryUpdatesOnRunEnd() {
+        var rng = new StubRng();
+        var persistence = new StubPersistence();
+        var data = new SaveData {
+            BankedJurassicCash = 100
+        };
+        persistence.Save(data);
+
+        var sim = new Simulation(rng, persistence, new StubContentProvider());
+
+        // Simulate a run where we collect some cash, level up, survive time, and advance stage
+        sim.StageNumber = 2;
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 150f); // survive 150s
+
+        // Add 10 XP gems at player position to trigger level up
+        for (int i = 0; i < 10; i++) {
+            sim.XpGems.Add(new XpGem(sim.PlayerPosition, 10f));
+        }
+        // Step once to collect them
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+        Assert.True(sim.IsPausedForLevelUp);
+        sim.SelectLevelUpOption(0); // Level-up completed to Level 2
+
+        // Add 2 cash drops at player position
+        sim.JurassicCashDrops.Add(new JurassicCashDrop(sim.PlayerPosition, 10));
+        sim.JurassicCashDrops.Add(new JurassicCashDrop(sim.PlayerPosition, 15));
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f); // collect cash
+
+        // Now quit the run
+        sim.QuitRun();
+
+        // Check that best run summary in persistence was updated
+        var loaded = persistence.Load();
+        Assert.Equal(2, loaded.BestRun.MaxStageReached);
+        Assert.Equal(2, loaded.BestRun.MaxLevelReached);
+        Assert.Equal(150.2f, loaded.BestRun.MaxTimeSurvived, 1);
+        Assert.Equal(25, loaded.BestRun.MaxCashCollected);
+
+        // Run again with lesser stats and check that it doesn't overwrite with lesser values
+        var sim2 = new Simulation(rng, persistence, new StubContentProvider());
+        sim2.StageNumber = 1;
+        sim2.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 50f);
+        sim2.QuitRun();
+
+        var loaded2 = persistence.Load();
+        Assert.Equal(2, loaded2.BestRun.MaxStageReached);
+        Assert.Equal(2, loaded2.BestRun.MaxLevelReached);
+        Assert.Equal(150.2f, loaded2.BestRun.MaxTimeSurvived, 1);
+        Assert.Equal(25, loaded2.BestRun.MaxCashCollected);
+    }
+
+    [Fact]
+    public void FilePersistenceRoundTripsThroughDisk() {
+        string tempPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), System.Guid.NewGuid().ToString() + "_save.json");
+        try {
+            var persistence = new FilePersistence(tempPath);
+
+            // Load empty
+            var loadedEmpty = persistence.Load();
+            Assert.NotNull(loadedEmpty);
+            Assert.Equal(0, loadedEmpty.BankedJurassicCash);
+
+            // Save some data
+            var data = new SaveData {
+                BankedJurassicCash = 150,
+                IsAutoFireEnabled = false,
+                ShowFloatingDamageNumbers = true,
+                PermanentUpgradeRanks = new System.Collections.Generic.Dictionary<string, int> {
+                    { "MoveSpeed", 1 }
+                },
+                BestRun = new BestRunSummary {
+                    MaxStageReached = 2
+                }
+            };
+            persistence.Save(data);
+
+            // Read it back
+            var loaded = persistence.Load();
+            Assert.NotNull(loaded);
+            Assert.Equal(150, loaded.BankedJurassicCash);
+            Assert.False(loaded.IsAutoFireEnabled);
+            Assert.True(loaded.ShowFloatingDamageNumbers);
+            Assert.Equal(1, loaded.PermanentUpgradeRanks["MoveSpeed"]);
+            Assert.Equal(2, loaded.BestRun.MaxStageReached);
+        } finally {
+            if (System.IO.File.Exists(tempPath)) {
+                System.IO.File.Delete(tempPath);
+            }
+        }
+    }
+
+    // --- Issue #12: Field Pickups ---
+
+    [Fact]
+    public void FieldPickup_SpawnsAndExpires() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        var pickup = new FieldPickup(new Vector2(100f, 100f), FieldPickupType.DoubleDamage, lifetime: 10f);
+        
+        sim.SpawnFieldPickup(pickup);
+        Assert.Single(sim.FieldPickups);
+        Assert.Equal(pickup, sim.FieldPickups[0]);
+
+        // Step simulation by 5s. Pickup shouldn't expire yet.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 5f);
+        Assert.Single(sim.FieldPickups);
+        Assert.Equal(5f, sim.FieldPickups[0].Lifetime);
+
+        // Step simulation past lifetime. Pickup should expire.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 5.1f);
+        Assert.Empty(sim.FieldPickups);
+    }
+
+    [Fact]
+    public void FieldPickup_CollectedWhenInRange() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        // Player is at (1000, 1000) by default. Place pickup at (1020, 1000) (within default effective radius 45).
+        var pickup = new FieldPickup(new Vector2(1020f, 1000f), FieldPickupType.DoubleDamage, lifetime: 10f, duration: 30f, multiplier: 2f);
+        sim.SpawnFieldPickup(pickup);
+
+        bool eventFired = false;
+        FieldPickup? collectedPickup = null;
+        sim.OnFieldPickupCollected += (p) => {
+            eventFired = true;
+            collectedPickup = p;
+        };
+
+        // Step simulation. Player is in range, so pickup should be collected.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 0.1f);
+
+        Assert.Empty(sim.FieldPickups);
+        Assert.True(eventFired);
+        Assert.Equal(pickup, collectedPickup);
+        Assert.Single(sim.ActiveFieldEffects);
+        Assert.Equal(FieldPickupType.DoubleDamage, sim.ActiveFieldEffects[0].Type);
+        Assert.Equal(29.9f, sim.ActiveFieldEffects[0].Duration, 3);
+        Assert.Equal(2f, sim.ActiveFieldEffects[0].Multiplier);
+    }
+
+    [Fact]
+    public void FieldPickup_EffectsModifyStats() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        
+        float baseSpeed = sim.PlayerEffectiveSpeed;
+        float baseRadius = sim.PlayerEffectivePickupRadius;
+
+        // Apply Speed Boost (1.5x) and Magnet (2.0x)
+        sim.ActiveFieldEffects.Add(new ActiveFieldEffect(FieldPickupType.SpeedBoost, 10f, 1.5f));
+        sim.ActiveFieldEffects.Add(new ActiveFieldEffect(FieldPickupType.Magnet, 10f, 2.0f));
+
+        Assert.Equal(baseSpeed * 1.5f, sim.PlayerEffectiveSpeed);
+        Assert.Equal(baseRadius * 2.0f, sim.PlayerEffectivePickupRadius);
+
+        // Apply Double Damage (2.0x) and check projectile damage.
+        sim.ActiveFieldEffects.Add(new ActiveFieldEffect(FieldPickupType.DoubleDamage, 30f, 2.0f));
+        
+        // Step to fire projectile. Base damage is 10. With Double Damage, it should be 20.
+        sim.Step(new ControlActions(Vector2.Zero, new Vector2(1, 0)), 0f);
+        Assert.Single(sim.Projectiles);
+        Assert.Equal(20f, sim.Projectiles[0].Damage);
+
+        // Test stacking of the same type: another 1.5x Speed Boost.
+        sim.ActiveFieldEffects.Add(new ActiveFieldEffect(FieldPickupType.SpeedBoost, 10f, 1.5f));
+        // Speed multiplier should now be 1.5 * 1.5 = 2.25
+        Assert.Equal(baseSpeed * 2.25f, sim.PlayerEffectiveSpeed);
+    }
+
+    [Fact]
+    public void FieldPickup_ActiveEffectsExpire() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        float baseSpeed = sim.PlayerEffectiveSpeed;
+
+        sim.ActiveFieldEffects.Add(new ActiveFieldEffect(FieldPickupType.SpeedBoost, duration: 5f, multiplier: 1.5f));
+        Assert.Equal(baseSpeed * 1.5f, sim.PlayerEffectiveSpeed);
+
+        // Step by 3s. Buff should still be active.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 3f);
+        Assert.Single(sim.ActiveFieldEffects);
+        Assert.Equal(2f, sim.ActiveFieldEffects[0].Duration);
+        Assert.Equal(baseSpeed * 1.5f, sim.PlayerEffectiveSpeed);
+
+        // Step past duration (3s more). Buff should expire.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 3.1f);
+        Assert.Empty(sim.ActiveFieldEffects);
+        Assert.Equal(baseSpeed, sim.PlayerEffectiveSpeed);
+    }
+
+    [Fact]
+    public void FieldPickup_ClearedAtStageEnd() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+
+        // Spawn a pickup and add an active effect
+        sim.SpawnFieldPickup(new FieldPickup(new Vector2(500, 500), FieldPickupType.SpeedBoost));
+        sim.ActiveFieldEffects.Add(new ActiveFieldEffect(FieldPickupType.DoubleDamage, 30f, 2.0f));
+
+        Assert.Single(sim.FieldPickups);
+        Assert.Single(sim.ActiveFieldEffects);
+
+        // Move player to safehouse to trigger EnterSafehouse
+        RevealAndEnterSafehouse(sim);
+
+        Assert.Empty(sim.FieldPickups);
+        Assert.Empty(sim.ActiveFieldEffects);
+    }
+
+    [Fact]
+    public void FieldPickup_SpawnsPeriodically() {
+        var sim = new Simulation(new StubRng(), new StubPersistence(), new StubContentProvider());
+        
+        Assert.Empty(sim.FieldPickups);
+
+        // Step by 44 seconds. No pickup should spawn yet.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 44f);
+        Assert.Empty(sim.FieldPickups);
+
+        // Step 1 more second (total 45s). A pickup should spawn.
+        sim.Step(new ControlActions(Vector2.Zero, Vector2.Zero), 1.1f);
+        Assert.Single(sim.FieldPickups);
+        
+        var pickup = sim.FieldPickups[0];
+        Assert.True(pickup.Position.X >= 0 && pickup.Position.X <= sim.ArenaSize.X);
+        Assert.True(pickup.Position.Y >= 0 && pickup.Position.Y <= sim.ArenaSize.Y);
+    }
 }
 
 

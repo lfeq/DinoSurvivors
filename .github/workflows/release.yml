@@ -1,0 +1,165 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.x'
+
+      - name: Run tests
+        run: dotnet test DinoSurvivors.Tests/
+
+  build-macos:
+    runs-on: macos-14
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.x'
+
+      - name: Publish osx-arm64
+        run: |
+          dotnet publish DinoSurvivors.csproj \
+            -c Release \
+            -r osx-arm64 \
+            --self-contained \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:DebugType=none \
+            -p:DebugSymbols=false
+
+      - name: Mark binary executable
+        run: chmod +x bin/Release/net9.0/osx-arm64/publish/DinoSurvivors
+
+      - name: Archive publish directory
+        run: |
+          cd bin/Release/net9.0/osx-arm64/publish
+          zip -r "$GITHUB_WORKSPACE/DinoSurvivors-macOS.zip" .
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-zip
+          path: DinoSurvivors-macOS.zip
+
+  build-windows:
+    runs-on: windows-latest
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.x'
+
+      - name: Publish win-x64
+        run: >
+          dotnet publish DinoSurvivors.csproj
+          -c Release
+          -r win-x64
+          --self-contained
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=none
+          -p:DebugSymbols=false
+
+      - name: Archive publish directory
+        run: Compress-Archive -Path bin\Release\net9.0\win-x64\publish\* -DestinationPath DinoSurvivors-Windows.zip
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: DinoSurvivors-Windows.zip
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-macos, build-windows]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-zip
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-zip
+
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > release-notes.md << 'EOF'
+          ## DinoSurvivors
+
+          ### macOS (Apple Silicon)
+
+          1. Download and unzip `DinoSurvivors-macOS.zip`.
+          2. Open Terminal, navigate to the unzipped folder, and run:
+             ```
+             ./DinoSurvivors
+             ```
+
+          **Gatekeeper workaround (unsigned build)**
+
+          macOS will block the app on first launch because it is unsigned.
+          Clear the quarantine flag before running:
+          ```
+          xattr -dr com.apple.quarantine DinoSurvivors
+          ```
+          Or: right-click `DinoSurvivors` in Finder → **Open** → **Open** (first time only).
+
+          ---
+
+          ### Windows (x64)
+
+          1. Download and unzip `DinoSurvivors-Windows.zip`.
+          2. Double-click `DinoSurvivors.exe` to launch.
+
+          **SmartScreen workaround (unsigned build)**
+
+          Windows SmartScreen may warn that the app is unrecognized.
+          Click **More info** → **Run anyway** to launch.
+          EOF
+
+          gh release create "v0.0.${{ github.run_number }}" \
+            DinoSurvivors-macOS.zip \
+            DinoSurvivors-Windows.zip \
+            --title "v0.0.${{ github.run_number }} (${{ steps.sha.outputs.short }})" \
+            --notes-file release-notes.md

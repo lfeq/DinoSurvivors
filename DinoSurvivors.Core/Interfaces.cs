@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace DinoSurvivors.Core;
 
 public enum EnemyType { Compy, Raptor, Triceratops }
@@ -7,7 +9,24 @@ public interface IRng {
     int Next(int minValue, int maxValue);
 }
 
+public class BestRunSummary {
+    public int MaxStageReached { get; set; } = 1;
+    public int MaxLevelReached { get; set; } = 1;
+    public float MaxTimeSurvived { get; set; } = 0f;
+    public int MaxCashCollected { get; set; } = 0;
+}
+
+public class SaveData {
+    public int BankedJurassicCash { get; set; } = 0;
+    public System.Collections.Generic.Dictionary<string, int> PermanentUpgradeRanks { get; set; } = new();
+    public bool IsAutoFireEnabled { get; set; } = true;
+    public bool ShowFloatingDamageNumbers { get; set; } = true;
+    public BestRunSummary BestRun { get; set; } = new();
+}
+
 public interface IPersistence {
+    SaveData Load();
+    void Save(SaveData data);
 }
 
 public class SystemRng : IRng {
@@ -22,6 +41,12 @@ public class SystemRng : IRng {
 }
 
 public class NullPersistence : IPersistence {
+    private SaveData _data = new();
+
+    public SaveData Load() => _data;
+    public void Save(SaveData data) {
+        _data = data;
+    }
 }
 
 public class WeaponLevelData {
@@ -106,6 +131,9 @@ public static class DefaultContent {
         }},
         { 3, new[] {
             new WavePhase { StartTime = 0f,   SpawnInterval = 0.9f, Weights = new[] { (EnemyType.Compy, 20), (EnemyType.Raptor, 40), (EnemyType.Triceratops, 40) } }
+        }},
+        { 4, new[] {
+            new WavePhase { StartTime = 0f,   SpawnInterval = 1.5f, Weights = new[] { (EnemyType.Compy, 20), (EnemyType.Raptor, 60), (EnemyType.Triceratops, 20) } }
         }}
     };
 
@@ -189,6 +217,13 @@ public class WavePhase {
 
 public enum UpgradeType { NewWeapon, WeaponUpgrade, NewPassive, PassiveUpgrade, CashFallback }
 
+public enum SafehouseRewardType { PartialHeal, BankedCashBonus, BonusXp }
+
+public class SafehouseRewardOption {
+    public SafehouseRewardType Type { get; init; }
+    public float Amount { get; init; }
+}
+
 public class UpgradeOption {
     public UpgradeType Type { get; init; }
     public string? ItemId { get; init; }
@@ -207,4 +242,71 @@ public class WeaponInstance {
 
     public WeaponLevelData CurrentLevelData => Definition.Levels[Level - 1];
 }
+
+public enum TRexAttackState { Idle, Charging, Roaring, TailSweeping, SummoningWaves }
+
+public class TRex {
+    public Vector2 Position { get; set; }
+    public float Hp { get; set; }
+    public float MaxHp { get; }
+    public float Radius { get; } = 50f;
+    public float Damage { get; } = 30f;
+    public float ContactCooldown { get; } = 0.5f;
+    public float ContactCooldownTimer { get; set; }
+    public float HitFlashTimer { get; set; }
+    public float ChargeSpeed { get; } = 350f;
+    public float RoarRadius { get; } = 200f;
+    public float RoarDamagePerSecond { get; } = 15f;
+    public float TailSweepRadius { get; } = 250f;
+    public float TailSweepDamage { get; } = 40f;
+    public int SummonCount { get; } = 3;
+    public TRexAttackState AttackState { get; set; } = TRexAttackState.Idle;
+    public float AttackTimer { get; set; }
+    public int AttackSequenceIndex { get; set; }
+    public int LastPhase { get; set; } = 1;
+
+    public int Phase => Hp > MaxHp * 0.66f ? 1 : Hp > MaxHp * 0.33f ? 2 : 3;
+    public bool IsDefeated => Hp <= 0f;
+
+    public TRex(Vector2 position, float maxHp = 1500f) {
+        Position = position;
+        MaxHp = maxHp;
+        Hp = maxHp;
+    }
+}
+
+public enum FieldPickupType {
+    DoubleDamage,
+    SpeedBoost,
+    Magnet
+}
+
+public class FieldPickup {
+    public Vector2 Position { get; }
+    public FieldPickupType Type { get; }
+    public float Lifetime { get; set; }
+    public float Duration { get; }
+    public float Multiplier { get; }
+
+    public FieldPickup(Vector2 position, FieldPickupType type, float lifetime = 15f, float duration = 10f, float multiplier = 2f) {
+        Position = position;
+        Type = type;
+        Lifetime = lifetime;
+        Duration = duration;
+        Multiplier = multiplier;
+    }
+}
+
+public class ActiveFieldEffect {
+    public FieldPickupType Type { get; }
+    public float Duration { get; set; }
+    public float Multiplier { get; }
+
+    public ActiveFieldEffect(FieldPickupType type, float duration, float multiplier) {
+        Type = type;
+        Duration = duration;
+        Multiplier = multiplier;
+    }
+}
+
 

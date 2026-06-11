@@ -96,3 +96,81 @@
 - Added 8 new headless xUnit tests: Raptor stats, Triceratops stats, Stage 1 early spawn → Compy, Stage 1 late spawn → Raptor (with high NextValue RNG), LiveEnemyCap blocks spawning, 5+ nearby gems merge, 5+ nearby drops merge, 4 nearby gems do not merge.
 - All 61 tests pass (53 pre-existing + 8 new).
 - Closed issue #13.
+- Implemented Stage lifecycle: Stage Exit + Safehouse Break + multi-stage run (Issue #14).
+- Added SafehouseRewardType enum (PartialHeal, BankedCashBonus, BonusXp) and SafehouseRewardOption class to Interfaces.cs.
+- Added to Simulation: IsStageExitRevealed, SafehousePosition, ExitMarkerDirection (computed), IsPausedForSafehouseBreak, PendingSafehouseBreakOptions, IsRunComplete, and constants StageExitRevealTime (600f) / SafehouseZoneRadius (60f).
+- RevealSafehouse() places a boundary-side Safehouse using _rng (edge + offset); called automatically when StageTimeElapsed >= 600s.
+- EnterSafehouse() triggered at end of Step() when player is within SafehouseZoneRadius: banks Unbanked cash, clears enemies/XpGems/JurassicCashDrops/Projectiles, generates 3 reward options, sets IsPausedForSafehouseBreak.
+- SelectSafehouseRewardOption(int index): applies chosen reward, advances StageNumber (1→2→3) with carry-forward (weapons, passives, HP, banked cash) and cleared stage state, or sets IsRunComplete = true after stage 3.
+- Added IsPausedForSafehouseBreak to Step() early-return guard so simulation freezes during break.
+- Added 14 new headless xUnit tests covering reveal timing, boundary placement, continued spawning post-reveal, ExitMarkerDirection, zone-entry banking, pause state, all three reward types, no-step-while-paused, each reward behavior, stage advance with carry-forward, abandoned pickups on exit, and IsRunComplete after stage 3.
+- All 75 tests pass (61 pre-existing + 14 new).
+- Closed issue #14.
+- Implemented Heliport Stage + T-Rex Boss + Win Condition (Issue #16).
+- Stage 3 safehouse no longer ends the run; instead it advances to Stage 4 (HeliportStageNumber=4) and spawns a T-Rex at BossArenaCenter (1000, 1000).
+- Added TRex class to Interfaces.cs with phase-based attack state machine (3 phases by HP%: >66%=P1, >33%=P2, else P3), attack states (Idle/Charging/Roaring/TailSweeping/SummoningWaves), and phase-sequenced per-phase attack patterns.
+- Added Boss Arena Lock-In: IsBossArenaLocked activates when player enters 600f radius; player is clamped inside until T-Rex is defeated.
+- Win condition: after T-Rex defeated, a chopper zone appears at BossArenaCenter (80f radius); touching it sets IsRunComplete=true.
+- T-Rex attacks: Charging (moves at 350f toward player), Roaring (15 DPS AoE within 200f), TailSweep (40 instant damage within 250f on enter), SummoningWaves (spawns 3 Raptors near T-Rex).
+- Added 24 new headless xUnit tests covering all boss behaviors.
+- All 99 tests pass (75 pre-existing + 24 new).
+- Closed issue #16.
+- Implemented Level Up Choice menu in view (Game1) (Issue #22).
+- Added GetUpgradeOptionLabel helper in Simulation to generate capitalized upgrade labels (e.g. "FLARE GUN - LV 1->2" or "+25 JURASSIC CASH").
+- Added 3 new unit tests in SimulationTests.cs to cover label generation for NewWeapon, WeaponUpgrade, and Passive/Fallback cases.
+- Extended hand-rolled pixel font in Game1.cs to cover A-Z, space, +, -, and > symbols, replacing old digit-only arrays.
+- Integrated dim modal overlay, title/subtitle, selection highlights, and mouse/keyboard selection input (1/2/3, W/S/Up/Down + Enter, and mouse clicks) inside Game1.cs.
+- All 102 tests pass (99 pre-existing + 3 new).
+- Closed issue #22.
+- Implemented Save Data + Souvenir Shop + Permanent Upgrades (Issue #15) using /tdd.
+- Defined SaveData and BestRunSummary classes and updated the IPersistence interface in Interfaces.cs.
+- Implemented the JSON file-backed FilePersistence in DinoSurvivors.Core and memory-based serialization inside StubPersistence in TestDoubles.cs.
+- Integrated IPersistence in Simulation constructor to load/initialize save data, and mapped BankedJurassicCash, IsAutoFireEnabled, and ShowFloatingDamageNumbers properties to delegating SaveData fields.
+- Implemented shop methods: querying permanent upgrade ranks (GetPermanentUpgradeRank), price escalation calculation (GetPermanentUpgradeCost: 100 / 250 / 500 cash), and purchasing (BuyPermanentUpgrade).
+- Applied permanent upgrade multipliers to player baseline stats (max HP, movement speed, pickup radius) and compounded them with active passive items.
+- Integrated permanent upgrade multipliers to weapon firing step (projectile damage, weapon cooldowns, autonomous zapper damage).
+- Added best run summary tracking (maximum stage, player level, survived time, and cash collected) and triggered automatic saves on run endings (win, loss, or quit).
+- Connected the real FilePersistence("save.json") inside Game1.cs.
+- Added 7 new headless xUnit tests covering round-trip serialization, save loading, shop purchase deduction, cost escalation, baseline stat composition, combat stat composition, and best run updating.
+- All 109 tests pass (102 pre-existing + 7 new).
+- Closed issue #15.
+- Implemented Fire Mode Setting + Pause Menu + settings (Issue #10) using /tdd.
+- Updated Simulation.Step to process actions.Pause, toggling the pause state and freezing the step update logic.
+- Updated Game1.cs to support edge-triggered pause, confirm, and cancel inputs to avoid rapid toggling.
+- Programmed a Pause Menu and a Settings sub-menu in Game1.cs update/draw loops:
+  - The Pause Menu overlay presents "RESUME", "SETTINGS", and "QUIT RUN" options.
+  - The Settings Menu overlay allows toggling "FIRE MODE" (between Auto and Manual fire) and "DAMAGE NUMBERS" (between ON and OFF).
+  - Both screens support keyboard (1/2/3, W/S/Up/Down + Enter) and mouse click/hover selection.
+  - Adjusting settings auto-saves changes to persistence via SaveSimulationData.
+- Added 1 new headless test verifying pause/unpause state toggles and simulation freezing behavior.
+- All 110 tests pass (109 pre-existing + 1 new).
+- Closed issue #10.
+- Implemented Field Pickups (timed temporary effects) (Issue #12) using /tdd.
+- Defined FieldPickupType enum (DoubleDamage, SpeedBoost, Magnet), FieldPickup (ground-space item), and ActiveFieldEffect (active buff) classes.
+- Added FieldPickups and ActiveFieldEffects lists to Simulation, along with the OnFieldPickupCollected event and SpawnFieldPickup injection method.
+- Updated Simulation.Step to:
+  - Check player-to-pickup collection within PlayerEffectivePickupRadius, firing OnFieldPickupCollected and adding the ActiveFieldEffect on collection.
+  - Tick down and expire ground pickups (Lifetime) and active buffs (Duration) by deltaTime.
+  - Periodically spawn random Field Pickups in the arena on a 45-second interval using _rng.
+- Integrated temporary stat multipliers in effective stat properties (speed, pickup radius, max HP) and combat calculation steps (damage, weapon cooldowns).
+- Updated EnterSafehouse to clear all ground pickups and active buffs at stage transitions.
+- Added 6 new headless unit tests covering spawning, lifetime expiration, collection range/events, stat composition/multiplicative stacking, duration expiration, stage transitions, and periodic spawning.
+- All 116 tests pass (110 pre-existing + 6 new).
+- Closed issue #12.
+- Updated PRD issue tracking and closed Issue #1 (PRD: DinoSurvivors PC MVP) as fully implemented.
+- Implemented CI Slice 1: single-platform macOS release pipeline (Issue #18).
+- Added `.github/workflows/release.yml`: triggers on push to main only, sets up .NET 9 SDK, runs `dotnet publish -r osx-arm64` self-contained single-file, marks the binary executable, archives the entire publish directory to DinoSurvivors-macOS.zip, and creates a GitHub Release tagged `v0.0.${{ github.run_number }}` with the short commit SHA in the title and macOS Gatekeeper workaround instructions in the release notes.
+- Concurrency group cancels superseded in-progress runs. Workflow does NOT trigger on tag pushes to avoid loops.
+- No new C# tests added (CI YAML only); all 116 existing tests still pass.
+- Closed issue #18.
+- Implemented CI Slice 2: Windows target + dedicated release job (Issue #19).
+- Refactored `.github/workflows/release.yml` into three jobs: `build-macos` (macos-14, osx-arm64) and `build-windows` (windows-latest, win-x64) run in parallel — each publishes, archives, and uploads a zip artifact; a dedicated `release` job (ubuntu-latest, needs both builds) downloads both artifacts and creates ONE GitHub Release with both zips attached.
+- Windows archive uses PowerShell `Compress-Archive`; release notes now cover both macOS Gatekeeper and Windows SmartScreen workarounds.
+- Deleted obsolete `scripts/build-macos.sh` and `scripts/build-windows.sh`; the workflow is now the single source of truth for release builds.
+- No new C# tests added (CI YAML only); all 116 existing tests still pass.
+- Closed issue #19.
+- Implemented CI Slice 3: test gate before builds (Issue #20).
+- Added a `test` job to `.github/workflows/release.yml` that runs on `ubuntu-latest` and executes `dotnet test DinoSurvivors.Tests/`.
+- Added `needs: test` to both `build-macos` and `build-windows` jobs so a failing test suite blocks artifact creation and the GitHub Release.
+- No new C# tests added (CI YAML only); all 116 existing tests still pass.
+- Closed issue #20.

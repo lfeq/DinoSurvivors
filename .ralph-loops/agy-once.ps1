@@ -5,8 +5,8 @@ $PSScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $PromptPath = Join-Path $PSScriptRoot "prompt.md"
 
 if (Test-Path $PromptPath) {
-    $Prompt = Get-Content -Raw $PromptPath
-    $null | agy --dangerously-skip-permissions --sandbox -p "$Prompt"
+    $PROMPT = Get-Content -Raw $PromptPath
+    $null | agy --prompt-interactive "$PROMPT"
 } else {
     Write-Error "Prompt file not found at $PromptPath"
     exit 1
