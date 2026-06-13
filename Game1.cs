@@ -2,6 +2,7 @@ using System;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
+using Microsoft.Xna.Framework.Media;
 using DinoSurvivors.Core;
 
 namespace DinoSurvivors;
@@ -12,6 +13,7 @@ public class Game1 : Game {
     
     private Simulation _simulation;
     private Texture2D _pixelTexture;
+    private Song _backgroundMusic;
     private Vector2 _cameraPosition;
     private float _playerDamageFlashTimer = 0f;
     private KeyboardState _previousKeyboardState;
@@ -87,6 +89,15 @@ public class Game1 : Game {
         
         _pixelTexture = new Texture2D(GraphicsDevice, 1, 1);
         _pixelTexture.SetData(new[] { Color.White });
+
+        try {
+            _backgroundMusic = Content.Load<Song>("Champion_s_Ascent");
+            MediaPlayer.IsRepeating = true;
+            MediaPlayer.Volume = 0.5f;
+            MediaPlayer.Play(_backgroundMusic);
+        } catch {
+            // Ignore if audio device or music asset is unavailable
+        }
     }
 
     protected override void Update(GameTime gameTime) {

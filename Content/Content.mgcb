@@ -13,3 +13,7 @@
 
 #---------------------------------- Content ---------------------------------#
 
+# music
+/importer:Mp3Importer
+/processor:SongProcessor
+/build:Champion_s_Ascent.mp3
