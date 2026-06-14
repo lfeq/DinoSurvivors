@@ -85,8 +85,6 @@ jobs:
           -c Release
           -r win-x64
           --self-contained
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
           -p:DebugType=none
           -p:DebugSymbols=false
 
@@ -149,8 +147,11 @@ jobs:
 
           ### Windows (x64)
 
-          1. Download and unzip `DinoSurvivors-Windows.zip`.
-          2. Double-click `DinoSurvivors.exe` to launch.
+          1. Download `DinoSurvivors-Windows.zip` and unzip it into a folder.
+          2. Double-click `DinoSurvivors.exe` inside that folder to launch.
+
+          > **Important:** keep all files from the zip together in the same folder.
+          > The `.exe` depends on the DLLs next to it and will not run if moved out on its own.
 
           **SmartScreen workaround (unsigned build)**
 
